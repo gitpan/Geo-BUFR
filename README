@@ -1,0 +1,42 @@
+BUFR version 1.0
+=================
+
+Library for handling of WMO (World Meteorological Organization) BUFR
+files.
+
+
+INSTALLATION
+
+To install this module type the following:
+
+   perl Makefile.PL
+   make
+   make test
+   make install
+
+DEPENDENCIES
+
+Carp, DynaLoader, FileHandle, File::Slurp, File::Spec::Functions,
+Getopt::Long, Pod::Usage, Test::More, Time::Local
+
+DESCRIPTION
+
+BUFR = Binary Universal Form for the Representation of meteorological
+data. BUFR is becoming the standard exchange format for meteorological
+data. This module provides methods for decoding and encoding BUFR
+messages, and for displaying information in BUFR B and D tables and in
+BUFR flag and code tables. The core routines for encoding and decoding
+bitstreams are implemented in C.
+
+This module also installs some example programs: bufrread.pl,
+bufrresolve.pl, bufrencode.pl, bufr_reencode.pl and bufralter.pl. See
+https://wiki.met.no/bufr.pm/start for examples of use.
+
+
+COPYRIGHT AND LICENCE
+
+This library is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
+
+Copyright (C) 2010 met.no
+
