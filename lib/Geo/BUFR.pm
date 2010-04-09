@@ -81,7 +81,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.0';
+our $VERSION = '1.1';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -970,7 +970,7 @@ sub _read_message {
             $self->{EOF} = 1;
             _croak "Error reading section 0: this is not a BUFR message?"
         }
-        $sec0 = substr($in_buffer, $pos + 4, 4);
+        $sec0 = substr $in_buffer, $pos + 4, 4;
     }
 
     # Extract length and edition number
@@ -993,7 +993,7 @@ sub _read_message {
             _croak "BUFR message truncated or 'BUFR' is not start of "
                 . " a real BUFR message";
         }
-        $msg = substr($in_buffer, $pos + 8, $length - 8);
+        $msg = substr $in_buffer, $pos + 8, $length - 8;
         $pos += $length;
     }
     $self->_spew(2, "Successfully read BUFR message; position now $pos (0x%X)", $pos);
@@ -1072,8 +1072,8 @@ sub _decode_sections {
                 if $sec1[0] > length($self->{BUFR_STREAM});
 
         push @sec1, (unpack 'a*', substr $self->{BUFR_STREAM},17,$sec1[0]-17);
-        $self->{SEC1_STREAM} = substr($self->{BUFR_STREAM}, 0, $sec1[0]);
-        $self->{BUFR_STREAM} = substr($self->{BUFR_STREAM}, $sec1[0]);
+        $self->{SEC1_STREAM} = substr $self->{BUFR_STREAM}, 0, $sec1[0];
+        $self->{BUFR_STREAM} = substr $self->{BUFR_STREAM}, $sec1[0];
         $self->{SEC1}                 = \@sec1;
         $self->{MASTER_TABLE}         = $sec1[1];
         $self->{SUBCENTRE}            = $sec1[2];
@@ -1101,8 +1101,8 @@ sub _decode_sections {
                 if $sec1[0] > length($self->{BUFR_STREAM});
 
         push @sec1, (unpack 'a*', substr $self->{BUFR_STREAM},22,$sec1[0]-22);
-        $self->{SEC1_STREAM} = substr($self->{BUFR_STREAM}, 0, $sec1[0]);
-        $self->{BUFR_STREAM} = substr($self->{BUFR_STREAM}, $sec1[0]);
+        $self->{SEC1_STREAM} = substr $self->{BUFR_STREAM}, 0, $sec1[0];
+        $self->{BUFR_STREAM} = substr $self->{BUFR_STREAM}, $sec1[0];
         $self->{SEC1}                 = \@sec1;
         $self->{MASTER_TABLE}         = $sec1[1];
         $self->{CENTRE}               = $sec1[2];
@@ -1139,9 +1139,9 @@ sub _decode_sections {
             . " bytes) than stated length of section 2 ($sec2[0] bytes)"
                 if $sec2[0] > length($self->{BUFR_STREAM});
 
-        push @sec2, substr($self->{BUFR_STREAM}, 4, $sec2[0]-4);
-        $self->{SEC2_STREAM} = substr($self->{BUFR_STREAM}, 0, $sec2[0]);
-        $self->{BUFR_STREAM} = substr($self->{BUFR_STREAM}, $sec2[0]);
+        push @sec2, substr $self->{BUFR_STREAM}, 4, $sec2[0]-4;
+        $self->{SEC2_STREAM} = substr $self->{BUFR_STREAM}, 0, $sec2[0];
+        $self->{BUFR_STREAM} = substr $self->{BUFR_STREAM}, $sec2[0];
         $self->{SEC2} = \@sec2;
     } else {
         $self->{SEC2} = undef;
@@ -1161,9 +1161,9 @@ sub _decode_sections {
         . " bytes) than stated length of section 3 ($sec3[0] bytes)"
             if $sec3[0] > length($self->{BUFR_STREAM});
 
-    push @sec3, substr($self->{BUFR_STREAM},7,($sec3[0]-7)&0x0ffe); # $sec3[0]-7 will be reduced by one if odd integer,
-                                                                    # so will not push last byte if length of sec3 is even,
-                                                                    # which might happen for BUFR edition < 4 (padding byte)
+    push @sec3, substr $self->{BUFR_STREAM},7,($sec3[0]-7)&0x0ffe; # $sec3[0]-7 will be reduced by one if odd integer,
+                                                                   # so will not push last byte if length of sec3 is even,
+                                                                   # which might happen for BUFR edition < 4 (padding byte)
     $self->{SEC3_STREAM} = substr $self->{BUFR_STREAM}, 0, $sec3[0];
     $self->{BUFR_STREAM} = substr $self->{BUFR_STREAM}, $sec3[0];
 
@@ -1701,6 +1701,9 @@ sub _get_code_table_txt {
 
         my $width = (split /\0/, $B_table->{$flag_table})[4];
         $width += 0;            # Get rid of spaces
+        # Cannot handle more than 32 bits flags with current method
+        _croak "Unable to handle > 32 bits flag; $id has width $width"
+            if $width > 32;
 
         my $max_value = 2**$width - 1;
 
@@ -1710,9 +1713,11 @@ sub _get_code_table_txt {
             $txt = sprintf "%s=> %s", ' ' x ($num_spaces), "bit $width set:"
                 . sprintf "%s   %s\n", ' ' x ($num_spaces), "missing value\n";
         } else {
-            my $binary = pack "I", $value;
-            for my $i (0..$width) {
-                if (vec($binary,$width-$i,1)) {
+            # Convert to bitstring and localize the 1 bits
+            my $binary = pack "N", $value; # Packed as 32 bits in big-endian order
+            my $bitstring = substr unpack('B*',$binary), 32-$width;
+            for my $i (1..$width) {
+                if (substr($bitstring, $i-1, 1) == 1) {
                     $txt .= sprintf "%s=> %s", ' ' x ($num_spaces),
                         "bit $i set";
                     if ($C_table->{$flag_table}{$i}) {
@@ -1730,6 +1735,7 @@ sub _get_code_table_txt {
                 $txt = "Illegal value ($value): bit $width is set indicating missing value,"
                     . " but then value should be $max_value\n";
             }
+
         }
     }
     return $txt;
@@ -1754,8 +1760,8 @@ sub _expand_descriptors {
         my $f = int substr($descriptor, 0, 1);
         if ($f == 1) {
             # Simple Replication
-            my $x = substr($descriptor, 1, 2); # Replicate next $x descriptors
-            my $y = substr($descriptor, 3);    # Number of replications
+            my $x = substr $descriptor, 1, 2; # Replicate next $x descriptors
+            my $y = substr $descriptor, 3;    # Number of replications
             if ($y > 0) {
                 # Simple replication (replicate next x descriptors y times)
                 _croak "Not enough descriptors following replication "
@@ -1842,7 +1848,7 @@ sub resolve_descriptor {
     if ($how eq 'simply' or $how eq 'partially') {
         my @expanded;
         foreach my $id ( @desc ) {
-            my $f = substr( $id, 0, 1);
+            my $f = substr $id, 0, 1;
             if ($f == 3) {
                 _croak "$id is not in table D, unable to expand"
                     unless $D_table->{$id};
@@ -2003,7 +2009,7 @@ sub _decode_bitstream {
                     unless /0310(00|01|02|11|12)/ && exists $B_table->{$_};
 
                 my $width = (split /\0/, $B_table->{$_})[-1];
-                my $factor = bitstream2dec($bitstream, $pos, $width, 0, 1);
+                my $factor = bitstream2dec($bitstream, $pos, $width);
                 # Delayed descriptor replication factors (and
                 # associated fields) are the only values in section 4
                 # where all bits being 1 is not to be interpreted as a
@@ -2092,7 +2098,7 @@ sub _decode_bitstream {
                 _croak "Change reference operator 203Y is not followed by element"
                     . " descriptor, but $id" if $f > 0;
                 my $num_bits = $self->{CHANGE_REFERENCE_VALUE};
-                my $new_refval = bitstream2dec($bitstream, $pos, $num_bits, 0, 1);
+                my $new_refval = bitstream2dec($bitstream, $pos, $num_bits);
                 $pos += $num_bits;
                 # Negative value if most significant bit is set (one's complement)
                 $new_refval = $new_refval & (1<<$num_bits-1)
@@ -2114,7 +2120,7 @@ sub _decode_bitstream {
             if ($self->{ADD_ASSOCIATED_FIELD} and $id ne '031021') {
                 # First extract associated field
                 my $width = $self->{ADD_ASSOCIATED_FIELD};
-                my $value = bitstream2dec($bitstream, $pos, $width, 0, 0);
+                my $value = bitstream2dec($bitstream, $pos, $width);
                 $pos += $width;
                 push @{$subset_desc[$isub]}, 999999;
                 push @{$subset_data[$isub]}, $value;
@@ -2165,7 +2171,8 @@ sub _decode_bitstream {
                     . "is $width bits for descriptor $id" if $width % 8;
                 $value = bitstream2ascii($bitstream, $pos, $width/8);
             } else {
-                $value = bitstream2dec($bitstream, $pos, $width, $refval, $scale_factor);
+                $value = bitstream2dec($bitstream, $pos, $width);
+                $value = ($value + $refval) * $scale_factor if defined $value;
             }
             $self->_spew(3, "  %s", defined $value ? $value : 'missing');
             $pos += $width;
@@ -2252,7 +2259,7 @@ sub _decompress_bitstream {
                 unless /0310(00|01|02|11|12)/ && exists $B_table->{$_};
 
             my $width = (split /\0/, $B_table->{$_})[-1];
-            my $factor = bitstream2dec($bitstream, $pos, $width, 0, 1);
+            my $factor = bitstream2dec($bitstream, $pos, $width);
             # Delayed descriptor replication factors (and associated
             # fields) are the only values in section 4 where all bits
             # being 1 is not interpreted as a missing value
@@ -2336,7 +2343,7 @@ sub _decompress_bitstream {
             _croak "Change reference operator 203Y is not followed by element"
                 . " descriptor, but $id" if $f > 0;
             my $num_bits = $self->{CHANGE_REFERENCE_VALUE};
-            my $new_refval = bitstream2dec($bitstream, $pos, $num_bits, 0, 1);
+            my $new_refval = bitstream2dec($bitstream, $pos, $num_bits);
             $pos += $num_bits + 6;
             # Negative value if most significant bit is set (one's complement)
             $new_refval = $new_refval & (1<<$num_bits-1)
@@ -2439,7 +2446,7 @@ sub _extract_compressed_value {
         my $minval = bitstream2ascii($bitstream, $pos, $width/8);
         $pos += $width;
         # Extract number of bytes for next subsets
-        my $deltabytes = bitstream2dec($bitstream, $pos, 6, 0, 1);
+        my $deltabytes = bitstream2dec($bitstream, $pos, 6);
         $pos += 6;
         if ($deltabytes && defined $minval) {
             # Extract compressed data for all subsets. According
@@ -2466,20 +2473,21 @@ sub _extract_compressed_value {
         }
     } else {
         # Extract minimum value
-        my $minval = bitstream2dec($bitstream, $pos, $width, $refval, 1);
+        my $minval = bitstream2dec($bitstream, $pos, $width);
+        $minval += $refval if defined $minval;
         $pos += $width;
 #        $self->_spew(4, " Local reference value: %s", $minval);
 
         # Extract number of bits for next subsets
-        my $deltabits = bitstream2dec($bitstream, $pos, 6, 0, 1);
+        my $deltabits = bitstream2dec($bitstream, $pos, 6);
         $pos += 6;
 #        $self->_spew(4, " Increment width: %s", $deltabits);
 
         if ($deltabits && defined $minval) {
             # Extract compressed data for all subsets
             foreach my $isub (1..$nsubsets) {
-                my $value =
-                    bitstream2dec($bitstream, $pos, $deltabits, $minval, $scale_factor);
+                my $value = bitstream2dec($bitstream, $pos, $deltabits);
+                $value = ($value + $minval) * $scale_factor if defined $value;
                 # All bits set to 1 for associated field is NOT
                 # interpreted as missing value
                 if ($id == 999999 and ! defined $value) {
@@ -2789,7 +2797,7 @@ sub _encode_sec1 {
     }
 
     # Byte 1-3
-    my $sec1_len_binary = substr(pack("N", $sec1_len), 1, 3);
+    my $sec1_len_binary = substr pack("N", $sec1_len), 1, 3;
 
     return $sec1_len_binary . $sec1_stream;
 }
@@ -4116,8 +4124,8 @@ Geo::BUFR - Perl extension for handling of WMO BUFR files.
 B<BUFR> = B<B>inary B<U>niversal B<F>orm for the B<R>epresentation of
 meteorological data. BUFR is approved by WMO (World Meteorological
 Organization) as the standard universal exchange format for
-meteorological data, gradually replacing a lot of older alphanumeric
-data formats.
+meteorological observations, gradually replacing a lot of older
+alphanumeric data formats.
 
 This module provides methods for decoding and encoding BUFR messages,
 and for displaying information in BUFR B and D tables and in BUFR flag
@@ -4441,11 +4449,10 @@ $table is not found.
 Manipulate binary data (these are implemented in C for speed and primarily
 intended as module internal subroutines):
 
-  $value = Geo::BUFR->bitstream2dec($bitstream,$bitpos,$num_bits,$offset,$scale);
+  $value = Geo::BUFR->bitstream2dec($bitstream,$bitpos,$num_bits);
 
 Extract $num_bits bits from $bitstream, starting at bit $bitpos.
-The extracted bits is interpreted as a non negative integer,
-then $offset is added and the result multiplied with $scale.
+The extracted bits is interpreted as a non negative integer.
 Returns undef if all bits extracted are 1 bits.
 
   $ascii = Geo::BUFR->bitstream2ascii($bitstream,$bitpos,$num_bytes);

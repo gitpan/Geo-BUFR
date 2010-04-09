@@ -1,5 +1,5 @@
-BUFR version 1.0
-=================
+Geo::BUFR
+=========
 
 Library for handling of WMO (World Meteorological Organization) BUFR
 files.
@@ -23,10 +23,10 @@ DESCRIPTION
 
 BUFR = Binary Universal Form for the Representation of meteorological
 data. BUFR is becoming the standard exchange format for meteorological
-data. This module provides methods for decoding and encoding BUFR
-messages, and for displaying information in BUFR B and D tables and in
-BUFR flag and code tables. The core routines for encoding and decoding
-bitstreams are implemented in C.
+observations. This module provides methods for decoding and encoding
+BUFR messages, and for displaying information in BUFR B and D tables
+and in BUFR flag and code tables. The core routines for encoding and
+decoding bitstreams are implemented in C.
 
 This module also installs some example programs: bufrread.pl,
 bufrresolve.pl, bufrencode.pl, bufr_reencode.pl and bufralter.pl. See
