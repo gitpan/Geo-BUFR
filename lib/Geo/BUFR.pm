@@ -81,7 +81,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.1';
+our $VERSION = '1.11';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -4133,11 +4133,9 @@ and code tables.
 
 This module also installs some programs: bufrread.pl, bufrresolve.pl,
 bufrencode.pl, bufr_reencode.pl and bufralter.pl. See
-L<https://wiki.met.no/bufr.pm/start> for examples of use.
-
-For the majority of potential users of Geo::BUFR I would expect these
-programs to provide the BUFR toolkit they are looking for, saving you
-from reading through the rather lengthy list of methods below.
+L<https://wiki.met.no/bufr.pm/start> for examples of use. For the
+majority of potential users of Geo::BUFR I would expect these programs
+to be all that you will need Geo::BUFR for.
 
 Note that being Perl, this module cannot compete in speed with for
 example the (free) ECMWF Fortran library libbufr. Still, some effort

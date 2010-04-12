@@ -6,6 +6,7 @@ WriteMakefile(
      NAME               => 'Geo::BUFR',
      VERSION_FROM       => 'lib/Geo/BUFR.pm', # finds $VERSION
      PREREQ_PM          => {Carp => 0,
+                            Config => 0,
                             DynaLoader => 0,
                             FileHandle => 0,
                             File::Slurp => 0,

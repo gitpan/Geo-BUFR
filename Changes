@@ -1,15 +1,17 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.11  2010-04-12
+
+- Test scripts: removed shebang line and use Config to find perl path.
+
 1.1   2010-04-09
 
-- Resolving of flag values changed to work also for big endian platforms.
+- Resolving of flag values fixed to work for big endian platforms.
 
-- Scaling of values fetched from bitstream has been transfered from
-  BUFR.xs to BUFR.pm, resulting in new signature for method
-  bitstream2dec. Hopefully this will fix some tiny rounding errors in
-  decoding found on some systems.
+- Scaling of values fetched from bitstream transfered from BUFR.xs
+  to BUFR.pm, resulting in new signature for method bitstream2dec.
 
-1.0   2010-04-06
+1.0 2010-04-06
 
 - First release for CPAN.
 

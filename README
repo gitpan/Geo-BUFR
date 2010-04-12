@@ -16,7 +16,7 @@ To install this module type the following:
 
 DEPENDENCIES
 
-Carp, DynaLoader, FileHandle, File::Slurp, File::Spec::Functions,
+Carp, Config, DynaLoader, FileHandle, File::Slurp, File::Spec::Functions,
 Getopt::Long, Pod::Usage, Test::More, Time::Local
 
 DESCRIPTION
