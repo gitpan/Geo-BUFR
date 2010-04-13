@@ -81,7 +81,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.11';
+our $VERSION = '1.12';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -4201,8 +4201,8 @@ put in tables C'table_version'.TXT (not to be confused with WMO BUFR
 table C, which contain the operator descriptors). $default_table will
 be used if $table is not found. If no arguments are provided,
 C<load_Ctable()> will use BUFR section 1 information to decide which
-table to load (in which case C<next_observation> ought to have been
-called already). Returns table version.
+table to load (when decoding this means that C<next_observation> ought
+to have been called already). Returns table version.
 
 Get next observation (next subset in current BUFR message or first subset
 in next message):
@@ -4211,15 +4211,14 @@ in next message):
 
 where $descriptors is a reference to the array of fully expanded
 descriptors for this subset, $data is a reference to the corresponding
-values. This call will also decode section 0-3, whose content is then
-available through the access methods listed below. This is the main
-BUFR decoding routine in Geo::BUFR, and will call C<load_BDtables()>
-internally, but not C<load_Ctable>. The list of descriptors returned
-from C<next_observation> might contain also some data description
-operators (like 222000) which have no corresponding data value in
-section 4 in the BUFR message, with the corresponding value in $data
-set to the empty string. These operator descriptors will be printed by
-the C<dumpsection4> methods, but on unnumbered lines.
+values. This method is meant to be used to iterate through all BUFR
+messages in the file or input buffer (see C<new>) associated with the
+$bufr object. Whenever a new BUFR message is reached, section 0-3 will
+also be decoded, whose content is then available through the access
+methods listed below. This is the main BUFR decoding routine in
+Geo::BUFR, and will call C<load_BDtables()> internally, but not
+C<load_Ctable>. Consult L</DECODING/ENCODING> if you want more precise
+info about what is returned in $data and $descriptors.
 
 
 Print the content of a subset in BUFR message:
@@ -4231,11 +4230,11 @@ and, if this is first message in a WMO bulletin, WMO ahl (abbreviated
 header line), as well as content of sections 0, 1 and 3. For section
 4, will also print subset number. Normally C<dumpsections> is called
 after C<next_observation>, with same arguments as returned from this
-call. To get an impression of what the output will look like, please
-examine the examples provided at L<https://wiki.met.no/bufr.pm/start>
-for readbufr.pl. If C<dumpsections> does not give you exactly what you
-want, you might prefer to instead call the individual dumpsection
-methods below.
+call. From the examples given at
+L<https://wiki.met.no/bufr.pm/start#bufrreadpl> you can get an
+impression of what the output might look like. If C<dumpsections> does
+not give you exactly what you want, you might prefer to instead call
+the individual dumpsection methods below.
 
 Print the contents of sections 0-3 in BUFR message:
 
@@ -4246,10 +4245,10 @@ Print the contents of sections 0-3 in BUFR message:
 
 C<dumpsection2> returns an empty string if there is no optional
 section in the message. The argument should be a reference to a
-subroutine which takes the optional section as argument and returns
-the text you want displayed after the 'Length of section:' line. For
-general BUFR messages probably the best you can do is displaying a hex
-dump, in which case
+subroutine which takes the optional section as (a string) argument and
+returns the text you want displayed after the 'Length of section:'
+line. For general BUFR messages probably the best you can do is
+displaying a hex dump, in which case
 
   sub {return '    Hex dump:' . ' 'x26 . unpack('H*',substr(shift,4))}
 
@@ -4264,19 +4263,16 @@ Print the data of a subset (descriptor, value, name and unit):
 $width fixes the number of characters used for displaying the data
 values, and is optional (defaults to 15). $data and $descriptors are
 references to arrays of data values and BUFR descriptors respectively,
-likely to have been fetched from C<next_observation>. When printing,
-the artificial descriptor 999999 is used for associated fields
-following the 204Y operator, while element descriptors defining new
-reference values (following the 203Y operator) will have f=9 instead
-of 0 in order to distinguish them from normal element descriptors
-(also done by setting name to 'NEW REFERENCE VALUE'). Code and flag
+likely to have been fetched from C<next_observation>. Code and flag
 values will be resolved if a C table has been loaded, i.e. if
 C<load_Ctable> has been called earlier. C<dumpsection4_with_bitmaps>
-will display the bitmapped values side by side with the corresponding
-data values. If there is no bitmap in the BUFR message,
+will display the bit-mapped values side by side with the corresponding
+data values. If there is no bit-map in the BUFR message,
 C<dumpsection4_with_bitmaps> will provide same output as
-C<dumpsection4>.
-
+C<dumpsection4>. See L</DECODING/ENCODING> for some more information
+about what is printed, and
+L<https://wiki.met.no/bufr.pm/start#bufrreadpl> for real life examples
+of output.
 
 Set verbose level:
 
@@ -4302,6 +4298,9 @@ Enable/disable strict checking of BUFR format for recoverable errors
  - $n=1: warn (carp) if error but continue decoding
  - $n=2: die (croak) if error
 
+Confer L</STRICT CHECKING> for details of what is being checked if
+strict checking is enabled.
+
 Show all BUFR table C operators (data description operators) when
 calling dumpsection4:
 
@@ -4309,9 +4308,9 @@ calling dumpsection4:
  - $n=1 (or not provided): Show all operators
  - $n=0: Show only the really informative ones (default in Geo::BUFR)
 
-C<set_show_all_operators(1)> cannot be combined with
-C<dumpsections> because C<dumpsections> calls
-C<dumpsection4_with_bitmaps>, not C<dumpsection4>.
+C<set_show_all_operators(1)> cannot be combined with C<dumpsections>
+because C<dumpsections> calls C<dumpsection4_with_bitmaps>, not
+C<dumpsection4>.
 
 Set or get tablepath:
 
@@ -4387,11 +4386,11 @@ Encode a new BUFR message:
   $new_message = $bufr->encode_message($data_refs,$desc_refs);
 
 where $desc_refs->[$i] is a reference to the array of fully expanded
-descriptors for subset $i ($i=1 for first subset), $data_refs->[$i] is
-a reference to the corresponding values, using undef for missing
-values. The required metadata in section 0, 1 and 3 must have been set
-in $bufr before calling this method. See L</DECODING/ENCODING> for
-meaning of 'fully expanded descriptors'.
+descriptors for subset number $i ($i=1 for first subset),
+$data_refs->[$i] is a reference to the corresponding values, using
+undef for missing values. The required metadata in section 0, 1 and 3
+must have been set in $bufr before calling this method. See
+L</DECODING/ENCODING> for meaning of 'fully expanded descriptors'.
 
 Encode a NIL message:
 
@@ -4399,7 +4398,9 @@ Encode a NIL message:
 
 In section 4 all values will be set to missing except delayed
 replication factors (which are all set to 1) and the (descriptor,
-value) pairs in the hashref $station_id_ref.
+value) pairs in the hashref $station_id_ref. The required metadata in
+section 0, 1 and 3 must have been set in $bufr before calling this
+method.
 
 Reencode BUFR message(s):
 
@@ -4439,8 +4440,8 @@ Print the content of BUFR code (or flag) table:
 
   print $bufr->dump_codetable($code_table,$table,$default_table);
 
-where $table is name of the C...TXT file containing the code tables,
-optionally followed by a default table which will be used if
+where $table is (base)name of the C...TXT file containing the code
+tables, optionally followed by a default table which will be used if
 $table is not found.
 
 

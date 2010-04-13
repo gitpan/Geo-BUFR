@@ -1,5 +1,9 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.12  2010-04-13
+
+- Test script t/bufralter.pl: fixed a quoting bug.
+
 1.11  2010-04-12
 
 - Test scripts: removed shebang line and use Config to find perl path.
