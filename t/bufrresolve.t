@@ -23,9 +23,9 @@ $output = `$perl ./bufrresolve.pl --noexpand 301001 301011 301012 301022 002003 
 $expected = read_file( 't/noexpand.txt' ) ;
 is($output, $expected, 'testing bufrresolve.pl -n on descriptor sequence');
 
-$output = `$perl ./bufrresolve.pl --bufrtable B0000000000098013001 --verbose 1 307080 -t t/bt`;
+$output = `$perl ./bufrresolve.pl --bufrtable B0000000000098013001 307080 -t t/bt`;
 $expected = read_file( 't/307080.table' ) ;
-is($output, $expected, 'testing bufrresolve.pl -t -v on D descriptor');
+is($output, $expected, 'testing bufrresolve.pl -t on D descriptor');
 
 $output = `$perl ./bufrresolve.pl --code 020022 -t t/bt`;
 $expected = read_file( 't/codetable.txt' ) ;

@@ -81,7 +81,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.12';
+our $VERSION = '1.13';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -1476,7 +1476,7 @@ sub dumpsection4 {
         $value =~ s/\s+$//;     # Right justify character values
         if ($id =~ /^205/) {    # Character information operator
             $txt .= sprintf "%6d  %06d  %${width}.${width}s  %s\n",
-                ++$line_no, $id, $value, "";
+                ++$line_no, $id, $value, "CHARACTER INFORMATION";
             next ID;
         } elsif ($id =~ /^2/) {
             my $operator_name = _get_operator_name($id);
@@ -1496,7 +1496,7 @@ sub dumpsection4 {
         }
         _croak "Data descriptor $id is not present in BUFR table B"
             unless exists $B_table->{$id};
-        my ($name, $unit) = split /\0/, $B_table->{$id};
+        my ($name, $unit, $bits) = (split /\0/, $B_table->{$id})[0,1,4];
         # Code or flag table number equals $id, so no need to display this in [unit]
         my $short_unit = $unit;
         $short_unit = 'CODE TABLE' if $unit =~ /^CODE TABLE/;
@@ -1505,10 +1505,11 @@ sub dumpsection4 {
             ++$line_no, $id, $value, "$name [$short_unit]";
 
         # Check for illegal flag value
-        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $width > 1) {
+        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $bits > 1) {
             if ($value ne 'missing' and $value % 2) {
-                my $max_value = 2**$width - 1;
-                _complain("$id - $value: rightmost bit $width is set indicating missing value"
+                $bits += 0; # get rid of spaces
+                my $max_value = 2**$bits - 1;
+                _complain("$id - $value: rightmost bit $bits is set indicating missing value"
                           . " but then value should be $max_value");
             }
         }
@@ -1552,6 +1553,7 @@ my %OPERATOR_NAME_C =
       202 => 'CHANGE SCALE',
       203 => 'CHANGE REFERENCE VALUES',
       204 => 'ADD ASSOCIATED FIELD',
+      # This one is displayed, treated specially (and named CHARACTER INFORMATION)
 ##      205 => 'SIGNIFY CHARACTER',
       206 => 'SIGNIFY DATAWIDTH FOR THE IMMEDIATELY FOLLOWING LOCAL DESCRIPTOR',
       221 => 'DATA NOT PRESENT',
@@ -1634,7 +1636,7 @@ sub dumpsection4_with_bitmaps {
         $value =~ s/\s+$//;     # Right justify character values
         _croak "Data descriptor $id is not present in BUFR table B"
             unless exists $B_table->{$id};
-        my ($name, $unit) = split /\0/, $B_table->{$id};
+        my ($name, $unit, $bits) = (split /\0/, $B_table->{$id})[0,1,4];
         $line = sprintf "%6d  %06d  %${width}.${width}s ",
             $idx+1, $id, $value;
 
@@ -1660,10 +1662,11 @@ sub dumpsection4_with_bitmaps {
         $txt .= $line;
 
         # Check for illegal flag value
-        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $width > 1) {
-            if ($value % 2) {
-                my $max_value = 2**$width - 1;
-                _complain("$id - $value: rightmost bit $width is set indicating missing value"
+        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $bits > 1) {
+            if ($value ne 'missing' and $value % 2) {
+                my $max_value = 2**$bits - 1;
+                $bits += 0; # get rid of spaces
+                _complain("$id - $value: rightmost bit $bits is set indicating missing value"
                           . " but then value should be $max_value");
             }
         }
@@ -1681,11 +1684,11 @@ sub dumpsection4_with_bitmaps {
 ## Return the text found in flag or code tables for value $value of
 ## descriptor $id. The empty string is returned if $unit is neither
 ## CODE TABLE nor FLAG TABLE, or if $unit is CODE TABLE but for this
-## $value there is no text in C table. An 'Illegal value' message is
-## returned if $value is bigger than allowed or has highest bit set
-## without having all other bits set.
+## $value there is no text in C table. If $check_illegal is defined,
+## an 'Illegal value' message is returned if $value is bigger than
+## allowed or has highest bit set without having all other bits set.
 sub _get_code_table_txt {
-    my ($id,$value,$unit,$B_table,$C_table,$num_spaces) = @_;
+    my ($id,$value,$unit,$B_table,$C_table,$num_spaces,$check_illegal) = @_;
 
     my $txt = '';
     if ($unit =~ m/^CODE TABLE/) {
@@ -1707,7 +1710,7 @@ sub _get_code_table_txt {
 
         my $max_value = 2**$width - 1;
 
-        if ($value > $max_value) {
+        if (defined $check_illegal and $value > $max_value) {
             $txt = "Illegal value: $value is bigger than maximum allowed ($max_value)\n";
         } elsif ($value == $max_value) {
             $txt = sprintf "%s=> %s", ' ' x ($num_spaces), "bit $width set:"
@@ -1731,11 +1734,10 @@ sub _get_code_table_txt {
                     }
                 }
             }
-            if ($txt =~ /bit $width set/) {
+            if (defined $check_illegal and $txt =~ /bit $width set/) {
                 $txt = "Illegal value ($value): bit $width is set indicating missing value,"
                     . " but then value should be $max_value\n";
             }
-
         }
     }
     return $txt;
@@ -1888,7 +1890,8 @@ sub resolve_descriptor {
 }
 
 ## Return a text string telling which bits are set and the meaning of
-## the bits set when $value is interpreted as a flag value.
+## the bits set when $value is interpreted as a flag value, also
+## checking for illegal values.
 sub resolve_flagvalue {
     my $self = shift;
     my ($value,$flag_table,$table,$default_table,$num_leading_spaces) = @_;
@@ -1905,7 +1908,7 @@ sub resolve_flagvalue {
 
     my $unit = 'FLAG TABLE';
     return _get_code_table_txt($flag_table,$value,$unit,
-                               $B_table,$C_table,$num_leading_spaces);
+                               $B_table,$C_table,$num_leading_spaces,'check_illegal');
 }
 
 ## Return the content of code table $code_table
@@ -2055,10 +2058,6 @@ sub _decode_bitstream {
                     $desc[$idesc] = $desc[$new_idesc];
                     redo D_LOOP;
                 } elsif ($flow eq 'signify_character') {
-                    if ($Show_all_operators) {
-                        push @{$subset_desc[$isub]}, $id;
-                        push @{$subset_data[$isub]}, '';
-                    }
                     push @{$subset_desc[$isub]}, $id;
                     # Extract ASCII string
                     my $value = bitstream2ascii($bitstream, $pos, $y);
@@ -2154,7 +2153,10 @@ sub _decode_bitstream {
             # Override Table B values if Data Description Operators are in effect
             $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
             $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
-            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}{$isub};
+            # To prevent autovivification (see perlodc -f exists) we
+            # need this laborious test for defined
+            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
+                && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
             # Difference statistical values use different width and reference value
             if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
                 $width += 1;
@@ -2305,7 +2307,10 @@ sub _decompress_bitstream {
                 $desc[$idesc] = $desc[$bm_idesc];
                 redo D_LOOP;
             } elsif ($flow eq 'signify_character') {
-                _croak "205Y Signify character not implemented for compressed data";
+                push @desc_exp, $id;
+                $pos = $self->_extract_compressed_value($id, $idesc, $pos, $bitstream,
+                                                $nsubsets, \@subset_data);
+                next D_LOOP;
             } elsif ($flow eq 'no_value') {
                 # Some operator descriptors ought to be included
                 # in expanded descriptors even though they have no
@@ -2419,6 +2424,12 @@ sub _extract_compressed_value {
         $scale = 0;
         $refval = 0;
         $width = $self->{ADD_ASSOCIATED_FIELD};
+    } elsif ($id =~ /^205(\d\d\d)/) { # Signify character
+        $name = 'CHARACTER INFORMATION';
+        $unit = 'CCITTIA5';
+        $scale = 0;
+        $refval = 0;
+        $width = 8*$1;
     } else {
         _croak "Data descriptor $id is not present in BUFR table B"
             if not exists $B_table->{$id};
@@ -2553,6 +2564,16 @@ sub reencode_message {
     my $i = 0;
 
   MESSAGE: while ($i < @lines) {
+        # Some tidying after decoding of previous message might be
+        # necessary
+        undef $self->{CHANGE_WIDTH};
+        undef $self->{CHANGE_SCALE};
+        undef $self->{CHANGE_REFERENCE};
+        undef $self->{NEW_REFVAL_OF};
+        undef $self->{ADD_ASSOCIATED_FIELD};
+        undef $self->{BITMAPS};
+        undef $self->{BITMAP_OPERATORS};
+        $self->{NUM_BITMAPS} = 0;
         # $self->{LOCAL_USE} is always set for BUFR edition < 4 in _encode_sec1
         delete $self->{LOCAL_USE};
 
@@ -2662,7 +2683,7 @@ sub reencode_message {
             last SUBSET if /^Message/;
             $_ = substr $_, 0, $width + 16;
             s/^\s+//;
-            next if not /^\d/;
+            next SUBSET if not /^\d/;
             my ($n, $desc, $value) = split /\s+/, $_, 3;
             $subset++ if $n == 1;
             if (defined $value) {
@@ -3128,7 +3149,7 @@ sub _encode_bitstream {
                     my $value = $data_ref->[$idesc];
                     my $name = 'SIGNIFY CHARACTER';
                     my $unit = 'CCITTIA5';
-                    my ($scale, $refval, $width) = (0, 0, $y);
+                    my ($scale, $refval, $width) = (0, 0, 8*$y);
                     ($bitstream, $pos, $maxlen)
                         = $self->_encode_value($value,$isub,$unit,$scale,$refval,$width,"205$y",$bitstream,$pos,$maxlen);
                     next D_LOOP;
@@ -3231,7 +3252,8 @@ sub _encode_bitstream {
             _croak "Error: Data descriptor $id is not present in BUFR table B"
                 unless exists $B_table->{$id};
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
-            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}{$isub};
+            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
+                && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
             $self->_spew(3, "Encoding %6s  %-20s  %s  %d  %d",
                          $id, $unit, $name, $refval, $width);
             ($bitstream, $pos, $maxlen)
@@ -3296,7 +3318,8 @@ sub _encode_value {
         $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
         _croak "$id Data width is $width which is <= 0" if $width <= 0;
         $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
-        $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}{$isub};
+            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
+                && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
         # Difference statistical values use different width and reference value
         if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
             $width += 1;
@@ -3412,10 +3435,10 @@ sub _encode_compressed_value {
     # Get all values for this descriptor
     my @values;
     my $first_value = $data_refs->[1][$idesc];
-#    print "$first_value\n" if defined $first_value;
     my $all_equal = 1;        # Set to 0 if at least 2 elements differ
     foreach my $value ( map { $data_refs->[$_][$idesc] } 2..$nsubsets ) {
-        $all_equal = _check_equality($all_equal, $first_value, $value, $unit);
+        $all_equal = _check_equality($first_value, $value, $unit)
+            if $all_equal;
         if (not defined $value) {
             push @values, undef;
         } elsif ($unit eq 'CCITTIA5') {
@@ -3425,7 +3448,7 @@ sub _encode_compressed_value {
         }
         # Check for illegal flag value
         if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $width > 1) {
-            if ($value ne 'missing' and $value % 2) {
+            if (defined $value and $value ne 'missing' and $value % 2) {
                 my $max_value = 2**$width - 1;
                 _complain("$id - value $value in subset $_:\n"
                           . "rightmost bit $width is set indicating missing value"
@@ -3632,7 +3655,7 @@ sub _encode_compressed_bitstream {
                 my @values = map { $data_refs->[$_][$idesc] } 1..$nsubsets;
                 my $name = 'SIGNIFY CHARACTER';
                 my $unit = 'CCITTIA5';
-                my ($scale, $refval, $width) = (0, 0, $y);
+                my ($scale, $refval, $width) = (0, 0, 8*$y);
                 ($bitstream, $pos, $maxlen)
                     = $self->_encode_compressed_value($bitstream,$pos,$maxlen,
                                                       $unit,$scale,$refval,$width,
@@ -3778,8 +3801,8 @@ sub _check_section4_length {
 
     if ($comp_len > $actual_len) {
         _croak "More descriptors in expansion of section 3"
-            . "than what can fit in the given length of section 4"
-                . "($comp_len versus $actual_len bits)";
+            . " than what can fit in the given length of section 4"
+                . " ($comp_len versus $actual_len bits)";
     } else {
         return if not $Strict_checking; # Excessive bytes in section 4
                                         # does not prevent further decoding
@@ -3857,17 +3880,12 @@ sub _get_number_of_bits_to_store {
 }
 
 sub _check_equality {
-    my ($all_equal, $v, $w, $unit) = @_;
-    return 0 if $all_equal == 0;
+    my ($v, $w, $unit) = @_;
     if (defined $v and defined $w) {
         if ($unit eq 'CCITTIA5') {
-            if ($v ne $w) {
-                return 0;
-            }
+            return 0 if $v ne $w;
         } else {
-            if ($v != $w) {
-                return 0;
-            }
+            return 0 if $v != $w;
         }
     } elsif (defined $v or defined $w) {
         return 0;
@@ -4613,11 +4631,6 @@ mainly because I do not have access to BUFR messages containing such
 operators. If you happen to come over a BUFR message which the current
 module fails to decode properly, I would therefore highly appreciate
 if you could mail me this.
-
-Don't expect decoding and encoding to be completely reversible: slight
-rounding differences might occur. The decoded value 56.5204 for element
-descriptor 022161 in a BUFR message was for instance found to be
-changed into 56.5207 when encoded and decoded again.
 
 =head1 AUTHOR
 

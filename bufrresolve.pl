@@ -70,6 +70,14 @@ foreach (@ARGV) {
 my $verbose = $option{verbose} ? 1 : 0;
 Geo::BUFR->set_verbose($verbose);
 
+# The other BUFR utility programs expect an argument to verbose
+if ($verbose && ($ARGV[0] eq '1' || $ARGV[0] eq '2' || $ARGV[0] eq '3')) {
+    die "\nWARNING: Option --verbose takes no argument,"
+        . " but your '$ARGV[0]' looks suspiciously like one.\n"
+            . "Please try again (use '00000$ARGV[0]'"
+                . " if you really meant to provide that descriptor)\n";
+}
+
 # Set BUFR table path
 if ($option{tablepath}) {
     # Command line option --tablepath overrides all

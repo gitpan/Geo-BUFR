@@ -19,9 +19,9 @@ $output = `$perl ./bufrread.pl --bitmap t/substituted.bufr -t t/bt`;
 $expected = read_file( 't/substituted.txt_bitmap' ) ;
 is($output, $expected, 'testing bufrread.pl -b on temp message with qc and substituted values');
 
-$output = `$perl ./bufrread.pl --verbose 1 --data_only --noqc --width 10 --tablepath ~/bufr/bufrtables t/substituted.bufr -t t/bt`;
+$output = `$perl ./bufrread.pl --data_only --noqc --width 10 --tablepath ~/bufr/bufrtables t/substituted.bufr -t t/bt`;
 $expected = read_file( 't/substituted.txt_noqc' );
-is($output, $expected, 'testing bufrread.pl -v -d -n -w -t on temp message with qc');
+is($output, $expected, 'testing bufrread.pl -d -n -w -t on temp message with qc');
 
 $output = `$perl ./bufrread.pl --all_operators t/associated.bufr -t t/bt`;
 $expected = read_file( 't/associated.txt' );

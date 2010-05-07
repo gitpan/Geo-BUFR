@@ -16,6 +16,9 @@ To install this module type the following:
 
 DEPENDENCIES
 
+This module requires these other modules (of which all but File::Slurp
+are expected to be part of a standard Perl distribution)
+
 Carp, Config, DynaLoader, FileHandle, File::Slurp, File::Spec::Functions,
 Getopt::Long, Pod::Usage, Test::More, Time::Local
 

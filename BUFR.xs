@@ -17,7 +17,7 @@ static unsigned char SetLastBits[] = {
   0x1f, 0x3f, 0x7f, 0xff
 };
 
-MODULE = Geo::BUFR              PACKAGE = Geo::BUFR             
+MODULE = Geo::BUFR              PACKAGE = Geo::BUFR
 
 double
 bitstream2dec(unsigned char *bitstream,   \
@@ -27,7 +27,7 @@ bitstream2dec(unsigned char *bitstream,   \
     CODE:
         /* Extract wordlength bits from bitstream, starting at bitpos. */
         /* The extracted bits is interpreted as a non negative integer. */
-        /* Returns undef if all bits extracted are one bits. */
+        /* Returns undef if all bits extracted are 1 bits. */
 
         static unsigned int bitmask[] = {
             0,
@@ -40,11 +40,10 @@ bitstream2dec(unsigned char *bitstream,   \
             0x01ffffff, 0x03ffffff, 0x07ffffff, 0x0fffffff,
             0x1fffffff, 0x3fffffff, 0x7fffffff, 0xffffffff
         };
-        int bits = 0;
         int octet = bitpos/8;    /* Which octet the word starts in              */
         int startbit = bitpos & 0x07; /* Offset from start of octet to start of word */
-        int lastbits;
-        unsigned long word = 0;
+        int bits, lastbits;
+        unsigned long word;
 
         if (wordlength == 0) {
             word = 0;
@@ -91,18 +90,13 @@ bitstream2ascii(unsigned char *bitstream, int bitpos, int len)
     CODE:
         /* Extract len bytes from bitstream, starting at bitpos, and */
         /* interpret the extracted bytes as an ascii string. Return */
-        /* undef if the extracted bytes are all one bits */
+        /* undef if the extracted bytes are all 1 bits */
 
+        int octet = bitpos/8;
+        int lshift = bitpos & 0x07;
         unsigned char str[len+1];
-        int octet;
-        int lshift;
-        int rshift;
-        int missing;
-        int i;
+        int rshift, missing, i;
         SV *ascii;
-
-        octet = bitpos/8;
-        lshift = bitpos & 0x07;
 
         if (lshift == 0) {
             for (i = 0; i < len; i++)
@@ -141,44 +135,62 @@ dec2bitstream(unsigned long word, \
 
     PROTOTYPE: $$$$
     CODE:
-        /* Encode non negative integer value word in width bits in bitstream, */
+        /* Encode non negative integer value word in wordlength bits in bitstream, */
         /* starting at bit bitpos. Last byte will be padded with 1 bits */
 
-          int octet = bitpos/8;    /* Which octet the word should start in */
-          int startbit = bitpos & 0x07; /* Offset from start of octet to start of word */
-          int num_onebits;
-          int bits = 0;
+  int octet = bitpos/8;    /* Which octet the word should start in */
+  int startbit = bitpos & 0x07; /* Offset from start of octet to start of word */
+  int num_encodedbits, num_onebits, num_lastbits, i;
+  unsigned char lastbyte;
 
-          if (wordlength > 0) {
-            if (wordlength > 32) {
-              /* For now, we restrict ourselves to 32-bit words.
-                 Note that 'long' in C is assured to be 4 bytes */
-              exit(1);
-            } else {
-              /* First set the bits after startbit to 0 in first byte of bitstream */
-              bitstream[octet] &= SetFirstBits[startbit];
-              /* Shift the part of word we want to encode (the last wordlength bits)
-                 so that it starts at startbit in first byte (will be preceded by 0 bits) */
-              if (wordlength+startbit < 32) {
-                 word <<= (32-wordlength-startbit);
-              } else {
-                 word >>= (wordlength+startbit-32);
-              }
-              /* Then extract first byte, which must be shifted to last byte
-                 before doing bitwise OR with an unsigned char */
-              bitstream[octet] |= word >> 24;
-              /* Then encode remaining bytes in word, if any */
-              bits = 8 - startbit;
-              while (wordlength-bits > 0) {
-                word <<= 8;
-                bitstream[++octet] = word >> 24;
-                bits += 8;
-              }
-              /* Finally pad last encoded byte in bitstream with one bits */
-              num_onebits = 8 - (startbit + wordlength) & 0x07;
-              bitstream[octet] |= SetLastBits[num_onebits];
-            }
-          }
+  if (wordlength > 32) {
+    /* Data width in table B for numerical data will hopefully never
+       exceed 32. Since 'long' in C is assured to be 4 bytes, we are
+       not able to encode that big values with present method. */
+    exit(1);
+  }
+  if (wordlength > 0) {
+    /* First set the bits after startbit to 0 in first byte of bitstream */
+    bitstream[octet] &= SetFirstBits[startbit];
+    if (wordlength+startbit <= 32) {
+    /* Shift the part of word we want to encode (the last wordlength bits)
+       so that it starts at startbit in first byte (will be preceded by 0 bits) */
+      word <<= (32-wordlength-startbit);
+      /* Then extract first byte, which must be shifted to last byte
+         before being assigned to an unsigned char */
+      bitstream[octet] |= word >> 24;
+      /* Then encode remaining bytes in word, if any */
+      num_encodedbits = 8-startbit;
+      while (num_encodedbits < wordlength) {
+        word <<= 8;
+        bitstream[++octet] = word >> 24;
+        num_encodedbits += 8;
+      }
+      /* Finally pad last encoded byte in bitstream with one bits */
+      num_onebits = 8 - (startbit + wordlength) & 0x07;
+      bitstream[octet] |= SetLastBits[num_onebits];
+    } else {
+      /* When aligning word with bitstream[octet], we will in this
+         case lose some of the rightmost bits, which we therefore need
+         to save first */
+      num_lastbits = startbit+wordlength-32;
+      lastbyte = word << (8-num_lastbits);
+      /* Align word with bitstream[octet] */
+      word >>= num_lastbits;
+      /* Then extract and encode the bytes in word, which must be
+         shifted to last byte before being assigned to an unsigned
+         char */
+      bitstream[octet++] |= word >> 24;
+      word <<= 8;
+      for (i=0; i<3; i++) {
+        bitstream[octet++] = word >> 24;
+        word <<= 8;
+      }
+      /* Finally encode last bits (which we shifted off from word above),
+         padded with one bits */
+      bitstream[octet] = lastbyte | SetLastBits[8-num_lastbits];
+    }
+  }
 
 
 void
@@ -193,8 +205,7 @@ ascii2bitstream(unsigned char *ascii, \
 
         int octet = bitpos/8;    /* Which octet the word should start in */
         int startbit = bitpos & 0x07; /* Offset from start of octet to start of word */
-        int lshift;
-        int i;
+        int lshift, i;
 
         if (width > 0) {
           if (startbit == 0) {
@@ -229,8 +240,7 @@ null2bitstream(unsigned char *bitstream, \
 
         int octet = bitpos/8;    /* Which octet the word should start in */
         int startbit = bitpos & 0x07; /* Offset from start of octet to start of word */
-        int num_onebits;
-        int bits;
+        int bits, num_onebits;
 
         if (wordlength > 0) {
           /* First set the bits after startbit to 0 in first byte of bitstream */

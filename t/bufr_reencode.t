@@ -7,10 +7,11 @@ use Config;
 
 my $perl = $Config{perlpath};
 
-`$perl ./bufr_reencode.pl t/1xBUFRSYNOP-ed4.txt -t t/bt > t/out`; my
-$output = read_file('t/out'); my $expected =
-read_file('t/1xBUFRSYNOP-ed4.bufr'); unlink 't/out'; is($output,
-$expected, 'testing bufr_reencode.pl on BUFR SYNOP edition 4');
+`$perl ./bufr_reencode.pl t/1xBUFRSYNOP-ed4.txt -t t/bt > t/out`;
+my $output = read_file('t/out');
+my $expected = read_file('t/1xBUFRSYNOP-ed4.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl on BUFR SYNOP edition 4');
 
 `$perl ./bufr_reencode.pl t/3xBUFRSYNOP-com.txt -t t/bt > t/out`;
 $output = read_file('t/out');
