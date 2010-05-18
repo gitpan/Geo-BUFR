@@ -1,25 +1,24 @@
 Revision history for Perl extension Geo::BUFR.
 
-1.13  2010-05-06
+1.14  2010-05-18
+- Apply binmode to filehandle in fopen.
+- Added two more methods for extracting info from BUFR B and D tables.
 
+1.13  2010-05-07
 - Bugfix in dec2bitstream: could cause rounding errors when encoding
   big width numerical values.
 
 1.12  2010-04-13
-
 - Test script t/bufralter.pl: fixed a quoting bug.
 
 1.11  2010-04-12
-
 - Test scripts: removed shebang line and use Config to find perl path.
 
 1.1   2010-04-09
-
 - Resolving of flag values fixed to work for big endian platforms.
 - Scaling of values fetched from bitstream transfered from BUFR.xs
   to BUFR.pm, resulting in new signature for method bitstream2dec.
 
 1.0 2010-04-06
-
 - First release for CPAN.
 

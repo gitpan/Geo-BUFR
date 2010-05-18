@@ -81,7 +81,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.13';
+our $VERSION = '1.14';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -735,7 +735,6 @@ sub _read_B_table {
     }
     close $TABLE or _croak "Closing $tablefile failed: $!";
 
-    $B_table{VERSION} = $version;
     $BUFR_table{"B$version"} = \%B_table;
     return \%B_table;
 }
@@ -784,7 +783,6 @@ sub _read_C_table {
     }
     close $TABLE or _croak "Closing $tablefile failed: $!";
 
-    $C_table{VERSION} = $version;
     $BUFR_table{"C$version"} = \%C_table;
     return \%C_table;
 }
@@ -827,7 +825,6 @@ sub _read_D_table {
     }
     close $TABLE or _croak "Closing $tablefile failed: $!";
 
-    $D_table{VERSION} = $version;
     $BUFR_table{"D$version"} = \%D_table;
     return \%D_table;
 }
@@ -880,6 +877,10 @@ sub fopen {
         or _croak "Couldn't open file $filename for reading";
 
     $self->_spew(2, "File '$filename' opened for reading");
+
+    # For some OS this is necessary
+    binmode $self->{FILEHANDLE};
+
     $self->{FILENAME} = $filename;
     return 1;
 }
@@ -1693,6 +1694,8 @@ sub _get_code_table_txt {
     my $txt = '';
     if ($unit =~ m/^CODE TABLE/) {
         my $code_table = sprintf "%06d", $id;
+        return "Code table $code_table does not exist!\n"
+            if ! exists $C_table->{$code_table};
         if ($C_table->{$code_table}{$value}) {
             my @lines = split "\n", $C_table->{$code_table}{$value};
             foreach (@lines) {
@@ -1701,6 +1704,8 @@ sub _get_code_table_txt {
         }
     } elsif ($unit =~ m/^FLAG TABLE/) {
         my $flag_table = sprintf "%06d", $id;
+        return "Flag table $flag_table does not exist!\n"
+            if ! exists $C_table->{$flag_table};
 
         my $width = (split /\0/, $B_table->{$flag_table})[4];
         $width += 0;            # Get rid of spaces
@@ -1889,13 +1894,51 @@ sub resolve_descriptor {
     return $txt;
 }
 
+## Return BUFR table B information for an element descriptor for the
+## last table loaded, as an array of name, unit, scale, reference
+## value and data width in bits. Returns false if the descriptor is
+## not found or no data width is defined, or croaks if no table B has
+## been loaded.
+sub element_descriptor {
+    my $self = shift;
+    my $desc = shift;
+    _croak "Argument to element_descriptor must be an integer\n"
+        unless $desc =~ /^\d+$/;
+    $desc = sprintf "%06d", $desc;
+    _croak "No BUFR B table loaded\n" unless defined $self->{B_TABLE};
+    return unless defined $self->{B_TABLE}->{$desc};
+    my ($name, $unit, $scale, $refval, $width)
+        = split /\0/, $self->{B_TABLE}->{$desc};
+    return unless defined $width;
+    return ($name, $unit, $scale+0, $refval+0, $width+0);
+}
+
+## Return BUFR table D information for a sequence descriptor for the
+## last table loaded, as a space separated string of the descriptors
+## in the direct (nonrecursive) lookup in table D. Returns false if
+## the sequence descriptor is not found, or croaks if no table D has
+## been loaded.
+sub sequence_descriptor {
+    my $self = shift;
+    my $desc = shift;
+    _croak "Argument to element_descriptor must be an integer\n"
+        unless $desc =~ /^\d+$/;
+    _croak "No BUFR D table loaded\n" unless defined $self->{D_TABLE};
+    return unless defined $self->{D_TABLE}->{$desc};
+    if (wantarray) {
+        return split / /, $self->{D_TABLE}->{$desc};
+    } else {
+        return $self->{D_TABLE}->{$desc};
+    }
+}
+
 ## Return a text string telling which bits are set and the meaning of
 ## the bits set when $value is interpreted as a flag value, also
-## checking for illegal values.
+## checking for illegal values. The empty string is returned if $value=0.
 sub resolve_flagvalue {
     my $self = shift;
     my ($value,$flag_table,$table,$default_table,$num_leading_spaces) = @_;
-    _croak "Flag value must be > 0 to be valid!\n" if $value <= 0;
+    _croak "Flag value can't be negative!\n" if $value < 0;
     $num_leading_spaces ||= 0;  # Default value
 
     $self->load_Ctable($table,$default_table);
@@ -1915,7 +1958,7 @@ sub resolve_flagvalue {
 sub dump_codetable {
     my $self = shift;
     my ($code_table,$table,$default_table) = @_;
-    _croak("code_table '$code_table' is not an integer in dump_codetable()")
+    _croak("code_table '$code_table' is not a (positive) integer in dump_codetable()")
         unless $code_table =~ /^\d+$/;
     $code_table = sprintf "%06d", $code_table;
 
@@ -4432,18 +4475,41 @@ $decoded_messages. If bufrread.pl is to be called with C<--width
 $width>, this $width must be provided to C<reencode_message> also.
 
 
+Extract BUFR table B information for an element descriptor:
 
-Resolve BUFR table descriptors:
+  my ($name,$unit,$scale,$refval,$width) = $bufr->element_descriptor($desc);
+
+Will fetch name, unit, scale, reference value and data width in bits
+for element descriptor $desc in the last table B loaded in the $bufr
+object. Returns false if the descriptor is not found.
+
+Extract BUFR table D information for a sequence descriptor:
+
+  my @descriptors = $bufr->sequence_descriptor($desc);
+  my $string = $bufr->sequence_descriptor($desc);
+
+Will return the descriptors in a direct (nonrecursive) lookup for the
+sequence descriptor $desc in the last table D loaded in the $bufr
+object. In scalar context the descriptors will be returned as a space
+separated string. Returns false if the descriptor is not found.
+
+Resolve BUFR table descriptors (for printing):
 
   print $bufr->resolve_descriptor($how,@descriptors);
 
 where $how is one of 'fully', 'partially', 'simply' and 'noexpand'.
-Returns information about the BUFR table descriptors given. See
-L<https://wiki.met.no/bufr.pm/start#bufrresolvepl> for examples of how different
-values of $how affects the output. The relevant B/D table must have
-been loaded before calling C<resolve_descriptor>.
+Returns a text string suitable for printing information about the BUFR
+table descriptors given. $how = 'fully': Expand all D descriptors
+fully into B descriptors, with name, unit, scale, reference value and
+width (each on a numbered line, except for replication operators which
+are not numbered). $how = 'partially': Like 'fully, but expand D
+descriptors only once and ignore replication. $how = 'noexpand': Like
+'partially', but do not expand D descriptors at all. $how = 'simply':
+Like 'partially', but list the descriptors on one single line with no
+extra information provided. The relevant B/D table must have been
+loaded before calling C<resolve_descriptor>.
 
-Resolve flag table value:
+Resolve flag table value (for printing):
 
   print $bufr->resolve_flagvalue($value,$flag_table,$B_table,
                                  $default_B_table,$num_leading_spaces);
@@ -4580,7 +4646,7 @@ but can be changed to
 
   1: Issue warning (carp) but continue decoding/encoding
 
-  2: Croak instead of carp
+  2: Croak (die) instead of carp
 
 by calling C<set_strict_checking>. The following is checked for when
 $Strict_checking is set to 1 or 2:

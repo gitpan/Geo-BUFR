@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 8;
+use Test::More tests => 11;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -38,3 +38,23 @@ is($output, $expected, 'testing bufrresolve.pl -c -f on flag table');
 $output = `$perl ./bufrresolve.pl --code 008042 --flag 3 -t t/bt`;
 $expected = read_file( 't/illegal_flag.txt' ) ;
 is($output, $expected, 'testing bufrresolve.pl -c -f on illegal flag');
+
+
+
+# Testing of extracting table information for methods not included
+# in bufrresolve.pl
+
+use Geo::BUFR;
+Geo::BUFR->set_tablepath('t/bt');
+my $bufr = Geo::BUFR->new();
+$bufr->load_BDtables('B0000000000098013001');
+
+my ($name, $unit, $scale, $refval, $width) =
+    $bufr->element_descriptor('12101');
+is($width, '16', 'testing element_descriptor for width');
+
+my $string = $bufr->sequence_descriptor('301013');
+is($string, '004004 004005 004006', 'testing sequence_descriptor in scalar context');
+
+my @desc = $bufr->sequence_descriptor('301013');
+is($desc[2],'004006','testing sequence_descriptor in array context');

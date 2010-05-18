@@ -44,7 +44,7 @@ GetOptions(
            'simple',     # Like 'partial', but displaying the resulting
                          # descriptors on one line
            'bufrtable=s',# Set BUFR tables
-           'verbose',    # Display path and tables used
+           'verbose=i',  # Display path and tables used
        ) or pod2usage(-verbose => 0);
 
 
@@ -65,18 +65,17 @@ pod2usage(-verbose => 0) if defined $option{flag} and !defined $option{code};
 foreach (@ARGV) {
     pod2usage("All arguments must be integers!") unless /^\d+$/;
 }
+if (defined $option{code} && $option{code} !~ /^\d+$/) {
+    pod2usage("Code table is not a (positive) integer!");
+}
+if (defined $option{flag} && $option{flag} !~ /^\d+$/) {
+    pod2usage("Flag value is not a (positive) integer!");
+}
+
 
 # Set verbosity level for the BUFR module
 my $verbose = $option{verbose} ? 1 : 0;
 Geo::BUFR->set_verbose($verbose);
-
-# The other BUFR utility programs expect an argument to verbose
-if ($verbose && ($ARGV[0] eq '1' || $ARGV[0] eq '2' || $ARGV[0] eq '3')) {
-    die "\nWARNING: Option --verbose takes no argument,"
-        . " but your '$ARGV[0]' looks suspiciously like one.\n"
-            . "Please try again (use '00000$ARGV[0]'"
-                . " if you really meant to provide that descriptor)\n";
-}
 
 # Set BUFR table path
 if ($option{tablepath}) {
@@ -99,7 +98,11 @@ if (defined $option{code}) {
     # Resolve flag value or dump code table
     my $code_table = $option{code};
     if (defined $option{flag}) {
-        print $bufr->resolve_flagvalue($option{flag}, $code_table, $table);
+        if ($option{flag} == 0) {
+            print "No bits are set\n";
+        } else {
+            print $bufr->resolve_flagvalue($option{flag}, $code_table, $table);
+        }
     } else {
         print $bufr->dump_codetable($code_table, $table);
     }
@@ -127,18 +130,18 @@ if (defined $option{code}) {
      [--noexpand]
      [--bufrtable <name of BUFR B or D table]
      [--tablepath <path to BUFR tables>]
-     [--verbose]
+     [--verbose n]
      [--help]
 
   2) bufrresolve.pl --code <code_table>
      [--bufrtable <name of BUFR B or D table>]
      [--tablepath <path to BUFR tables>]
-     [--verbose]
+     [--verbose n]
 
   3) bufrresolve.pl --flag <value> --code <flag_table>
      [--bufrtable <name of BUFR B or D table]
      [--tablepath <path to BUFR tables>]
-     [--verbose]
+     [--verbose n]
 
 =head1 DESCRIPTION
 
@@ -166,7 +169,7 @@ defaults chosen.
 
    --bufrtable <name of BUFR B or D table>  Set BUFR tables
    --tablepath <path to BUFR tables>  Set BUFR table path
-   --verbose    Display path and tables used
+   --verbose n  Display path and tables used if n > 0
 
    --help       Display Usage and explain the options used. Almost
                 the same as consulting perldoc bufrresolve.pl
@@ -182,6 +185,14 @@ Usage 3): Displays the bits set for flag value <value> in flag table
 <flag_table>.
 
 Options may be abbreviated, e.g. C<--h> or C<-h> for C<--help>
+
+=head1 NOTE ON --VERBOSE
+
+n > 1 in C<--verbose n> does not provide any more output than n=1, so
+demanding an argument to C<--verbose> looks funny. But if not, sooner
+or later someone would type C<bufrresolve.pl 307080 --verbose 1> which
+by Perl would be interpreted as if the arguments were C<307080 000001
+--verbose>, which probably is not what the user intended.
 
 =head1 AUTHOR
 
