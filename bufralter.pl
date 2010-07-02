@@ -145,7 +145,7 @@ while (my $msg = <$IN>) {
     $/ = 'BUFR';
 }
 
-print $OUT $out;
+print $OUT $out if $out;
 
 
 # Extract data from BUFR file, possibly alter the data, and write the
@@ -157,7 +157,7 @@ sub alter {
         Geo::BUFR->set_noqc();
     }
 
-    my $new_bufr;
+    my $new_bufr = Geo::BUFR->new();
     my @subset_data; # Will contain data values for subset 1,2...
     my @subset_desc; # Will contain the set of descriptors for subset 1,2...
 
@@ -170,7 +170,7 @@ sub alter {
         my $nsubsets = $bufr->get_number_of_subsets();
 
         if ($isub == 1) {
-            $new_bufr = Geo::BUFR->clone($bufr);
+            $new_bufr->copy($bufr,'metadata');
             @subset_data = ();
             @subset_desc = ();
 

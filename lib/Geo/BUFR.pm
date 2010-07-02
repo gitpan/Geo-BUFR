@@ -78,10 +78,11 @@ use Carp;
 use FileHandle;
 use File::Spec::Functions qw(catfile);
 use Time::Local qw(timegm);
+# Also requires Storable if sub copy() is called
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.14';
+our $VERSION = '1.15';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -180,20 +181,56 @@ sub new {
     return $self;
 }
 
-
-## Copy constructor
-sub clone {
-    my $class = shift;
-    my $object = shift;
-    _croak "Argument to copy constructor is missing or is not a BUFR object"
-        unless $object && ref($object) eq $class;
-    my $self = {};
-    while (my ($key, $value) = each %{$object}) {
-        $self->{$key} = $value;
+## Copy content of the bufr object in first argument. With no extra
+## arguments, will copy (clone) everything. With 'metadata' as second
+## argument, will copy just the metadata in section 0, 1 and 3
+sub copy {
+    my $self = shift;
+    my $bufr = shift;
+    my $option = shift || 'all';
+    _croak("First argument to copy must be a Geo::BUFR object")
+        unless ref($bufr) eq 'Geo::BUFR';
+    if ($option eq 'metadata') {
+        for (qw(
+            BUFR_EDITION
+            MASTER_TABLE CENTRE SUBCENTRE UPDATE_NUMBER OPTIONAL_SECTION
+            DATA_CATEGORY INT_DATA_SUBCATEGORY LOC_DATA_SUBCATEGORY
+            MASTER_TABLE_VERSION LOCAL_TABLE_VERSION YEAR MONTH DAY
+            HOUR MINUTE SECOND LOCAL_USE DATA_SUBCATEGORY YEAR_OF_CENTURY
+            NUM_SUBSETS OBSERVED_DATA COMPRESSED_DATA DESCRIPTORS_UNEXPANDED
+            )) {
+            if (exists $bufr->{$_}) {
+                $self->{$_} = $bufr->{$_};
+            } else {
+                # This cleanup might be necessary if BUFR edition changes
+                delete $self->{$_} if exists $self->{$_};
+            }
+        }
+    } elsif ($option eq 'all') {
+        $self = {};
+        while (my ($key, $value) = each %{$bufr}) {
+            if ($key eq 'FILEHANDLE') {
+                # If a file has been associated with the copied
+                # object, make a new filehandle rather than just
+                # copying the reference
+                $self->fopen($bufr->{FILENAME});
+            } elsif (ref($value) and $key !~ /[BCD]_TABLE/) {
+                # Copy the whole structure, not merely the reference.
+                # Using Clone would be cheaper, but unfortunately
+                # Clone is not a core module, while Storable is
+                require Storable;
+                import Storable qw(dclone);
+                $self->{$key} = dclone($value);
+            } else {
+                $self->{$key} = $value;
+            }
+        }
+    } else {
+        _croak("Don't recognize second argument '$option' to copy()");
     }
-    bless $self, ref($class) || $class;
-    return $self;
+    return 1;
 }
+
 
 ##  Set debug level
 sub set_verbose {
@@ -733,7 +770,10 @@ sub _read_B_table {
         $refval =~ s/-\s+(\d+)/-$1/; # Remove blanks between minus sign and value
         $B_table{$fxy} = join "\0", $name, $unit, $scale, $refval, $bits;
     }
-    close $TABLE or _croak "Closing $tablefile failed: $!";
+    # When installing Geo::BUFR on Windows Vista with Strawberry Perl,
+    # close sometimes returned an empty string. Therefore removed
+    # check on return value for close.
+    close $TABLE; # or _croak "Closing $tablefile failed: $!";
 
     $BUFR_table{"B$version"} = \%B_table;
     return \%B_table;
@@ -781,7 +821,7 @@ sub _read_C_table {
             $C_table{$table}{$value} = $txt . "\n";
         }
     }
-    close $TABLE or _croak "Closing $tablefile failed: $!";
+    close $TABLE; # or _croak "Closing $tablefile failed: $!";
 
     $BUFR_table{"C$version"} = \%C_table;
     return \%C_table;
@@ -823,7 +863,7 @@ sub _read_D_table {
             $D_table{$alias} = $desc;
         }
     }
-    close $TABLE or _croak "Closing $tablefile failed: $!";
+    close $TABLE; # or _croak "Closing $tablefile failed: $!";
 
     $BUFR_table{"D$version"} = \%D_table;
     return \%D_table;
@@ -892,12 +932,31 @@ sub fclose {
             or _croak "Couldn't close BUFR file opened by fopen()";
         $self->_spew(3, "Closed file '$self->{FILENAME}'");
     }
+    delete $self->{FILEHANDLE};
+    delete $self->{FILENAME};
+    # Much more might be considered deleted here, but usually the bufr
+    # object goes out of scope immediately after a fclose anyway
     return 1;
 }
 
 sub eof {
     my $self = shift;
     return ($self->{EOF} || 0);
+}
+
+# Go to start of input buffer or start of file associated with the object
+sub rewind {
+    my $self = shift;
+    if (exists $self->{FILEHANDLE}) {
+        seek $self->{FILEHANDLE}, 0, 0 or _croak "Cannot seek: $!";
+    } elsif (! $self->{IN_BUFFER}) {
+        _croak "Cannot rewind: no file or input buffer associated with this object";
+    }
+    $self->{CURRENT_MESSAGE} = 0;
+    $self->{CURRENT_SUBSET} = 0;
+    delete $self->{POS};
+    delete $self->{EOF};
+    return 1;
 }
 
 ## Read in next BUFR message from file if $self->{FILEHANDLE} is set,
@@ -918,7 +977,9 @@ sub _read_message {
     _croak "_read_message: Neither BUFR file nor BUFR text is given"
         unless $filehandle or $in_buffer;
 
-    my $ahl_regexp = qr{ZCZC\d*\r\r\n(.+)\r\r};
+    # According to 2.3.1.1 in Manual On The GTS there are two
+    # possibilities for the starting line of a WMO bulletin
+    my $ahl_regexp = qr{(?:ZCZC|\001\r\r\n)\d*\r\r\n(.+)\r\r};
     $self->{CURRENT_AHL} = undef;
 
     # Locate next 'BUFR' and set $pos to this position in file/string,
@@ -956,7 +1017,7 @@ sub _read_message {
     }
 
     # Report (if verbose setting) where we found the BUFR message
-    $self->_spew(2, "BUFR message at position $pos (0x%X)", $pos);
+    $self->_spew(2, "BUFR message at position %d", $pos);
 
     # Read (rest) of Section 0 (length of BUFR message and edition number)
     my $sec0;                   # Section 0 is BUFR$sec0
@@ -976,8 +1037,7 @@ sub _read_message {
 
     # Extract length and edition number
     my ($length, $edition) = unpack 'NC', "\0$sec0";
-    $self->_spew(2, "Message length: %d (0x%X), Edition: %d",
-                 $length, $length, $edition);
+    $self->_spew(2, "Message length: %d, Edition: %d", $length, $edition);
 
     # Read rest of BUFR message (section 1-5)
     my $msg;
@@ -997,7 +1057,7 @@ sub _read_message {
         $msg = substr $in_buffer, $pos + 8, $length - 8;
         $pos += $length;
     }
-    $self->_spew(2, "Successfully read BUFR message; position now $pos (0x%X)", $pos);
+    $self->_spew(2, "Successfully read BUFR message; position now %d", $pos);
 
     # Reset $self->{POS} to end of BUFR message
     $self->{POS} = $pos;
@@ -1300,7 +1360,7 @@ sub next_observation {
         $self->_next_message();
     }
 
-    $self->{CURRENT_SUBSET} += 1;
+    $self->{CURRENT_SUBSET}++;
 
     # Raise a flag if this is the last observation in the last message
     $self->{EOF} = $self->{LAST_MESSAGE}
@@ -1685,9 +1745,11 @@ sub dumpsection4_with_bitmaps {
 ## Return the text found in flag or code tables for value $value of
 ## descriptor $id. The empty string is returned if $unit is neither
 ## CODE TABLE nor FLAG TABLE, or if $unit is CODE TABLE but for this
-## $value there is no text in C table. If $check_illegal is defined,
-## an 'Illegal value' message is returned if $value is bigger than
-## allowed or has highest bit set without having all other bits set.
+## $value there is no text in C table. Returns a "... does not exist!"
+## message if flag/code table is not found. If $check_illegal is
+## defined, an 'Illegal value' message is returned if $value is bigger
+## than allowed or has highest bit set without having all other bits
+## set.
 sub _get_code_table_txt {
     my ($id,$value,$unit,$B_table,$C_table,$num_spaces,$check_illegal) = @_;
 
@@ -1909,7 +1971,7 @@ sub element_descriptor {
     return unless defined $self->{B_TABLE}->{$desc};
     my ($name, $unit, $scale, $refval, $width)
         = split /\0/, $self->{B_TABLE}->{$desc};
-    return unless defined $width;
+    return unless defined $width && $width =~ /\d+$/;
     return ($name, $unit, $scale+0, $refval+0, $width+0);
 }
 
@@ -1954,7 +2016,8 @@ sub resolve_flagvalue {
                                $B_table,$C_table,$num_leading_spaces,'check_illegal');
 }
 
-## Return the content of code table $code_table
+## Return the content of code table $code_table, or empty string if
+## code table is not in found
 sub dump_codetable {
     my $self = shift;
     my ($code_table,$table,$default_table) = @_;
@@ -1965,8 +2028,7 @@ sub dump_codetable {
     $self->load_Ctable($table,$default_table);
     my $C_table = $self->{C_TABLE};
 
-    _croak "Code table $code_table not defined!\n"
-        unless $C_table->{$code_table};
+    return '' unless $C_table->{$code_table};
 
     my $dump;
     foreach my $value (sort {$a <=> $b} keys %{ $C_table->{$code_table} }) {
@@ -2032,6 +2094,7 @@ sub _decode_bitstream {
     # $subset_data[$isub] (the operators included having data value
     # '')
   S_LOOP: foreach my $isub (1..$self->{NUM_SUBSETS}) {
+        $self->_spew(2, "Decoding subset number %d", $isub);
         my @desc = split /\s/, $self->{DESCRIPTORS_EXPANDED};
 
         # Note: @desc as well as $idesc may be changed during this loop,
@@ -2191,7 +2254,7 @@ sub _decode_bitstream {
             _croak "Data descriptor $id is not present in BUFR table B"
                 unless exists $B_table->{$id};
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
-            $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name);
+            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
 
             # Override Table B values if Data Description Operators are in effect
             $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
@@ -2507,7 +2570,7 @@ sub _extract_compressed_value {
             # to 94.6.3 (2) (i) in FM 94 BUFR, the first value for
             # character data shall be set to all bits zero
             my $nbytes = $width/8;
-            _complain("CCITTIA5 minval not null bytes but '$minval'")
+            _complain("CCITTIA5 minval not all bits set to zero but '$minval'")
                 if $Strict_checking and $minval ne "\0" x $nbytes;
             foreach my $isub (1..$nsubsets) {
                 my $string = bitstream2ascii($bitstream, $pos, $deltabytes);
@@ -2586,6 +2649,9 @@ sub _extract_compressed_value {
             $self->{BUILD_BITMAP} = 0;
             $self->{BITMAP_INDEX} = 0;
         }
+        $self->_spew(3, "  %s", join ' ',
+                     map { defined($subset_data_ref->[$_][-1]) ?
+                       $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets );
     }
     return $pos;
 }
@@ -2764,11 +2830,16 @@ sub encode_message {
 
     _croak "encode_message: No data/descriptors provided" unless $desc_refs;
 
+    $self->{MESSAGE_NUMBER}++;
+    $self->_spew(2, "Encoding message number %d", $self->{MESSAGE_NUMBER});
+
     $self->load_BDtables();
 
+    $self->_spew(2, "Encoding section 1-3");
     my $sec1_stream = $self->_encode_sec1();
     my $sec2_stream = $self->_encode_sec2();
     my $sec3_stream = $self->_encode_sec3();
+    $self->_spew(2, "Encoding section 4");
     my $sec4_stream = $self->_encode_sec4($data_refs, $desc_refs);
 
     # Compute length of whole message and encode section 0
@@ -2948,24 +3019,29 @@ sub _encode_sec4 {
 }
 
 ## Encode a nil message, i.e. all values set to missing except delayed
-## replication factors (which are all set to 1) and the (descriptor,
-## value) pairs in the hash ref $station_id_ref. Note that data in
-## section 1 and 3 must have been set before calling this method.
+## replication factors and the (descriptor, value) pairs in the hash
+## ref $stationid_ref. Delayed replication factors will all be set to
+## 1 unless $delayed_repl_ref is provided, in which case the
+## descriptors 031001 and 031002 will get the values contained in
+## @$delayed_repl_ref. Note that data in section 1 and 3 must have
+## been set before calling this method.
 sub encode_nil_message {
     my $self = shift;
-    my ($station_id_ref) = @_;
+    my ($stationid_ref, $delayed_repl_ref) = @_;
 
     _croak "encode_nil_message: No station descriptors provided"
-        unless $station_id_ref;
+        unless $stationid_ref;
 
     my $bufr_edition = $self->{BUFR_EDITION} or
         _croak "encode_nil_message: BUFR edition not defined";
 
     $self->load_BDtables();
 
+    $self->_spew(2, "Encoding NIL message");
     my $sec1_stream = $self->_encode_sec1();
     my $sec3_stream = $self->_encode_sec3();
-    my $sec4_stream = $self->_encode_nil_sec4($station_id_ref);
+    my $sec4_stream = $self->_encode_nil_sec4($stationid_ref,
+                                              $delayed_repl_ref);
 
     # Compute length of whole message and encode section 0
     my $msg_len = 8 + length($sec1_stream) + length($sec3_stream)
@@ -2981,11 +3057,15 @@ sub encode_nil_message {
 }
 
 ## Encode and return section 4 with all values set to missing except
-## delayed replication factors (which are all set to 1) and the
-## (descriptor, value) pairs in the hash ref $station_id_ref
+## delayed replication factors and the (descriptor, value) pairs in
+## the hash ref $stationid_ref. Delayed replication factors will all
+## be set to 1 unless $delayed_repl_ref is provided, in which case the
+## descriptors 031001 and 031002 will get the values contained in
+## @$delayed_repl_ref (in that order).
 sub _encode_nil_sec4 {
     my $self = shift;
-    my $station_id_ref = shift;
+    my ($stationid_ref, $delayed_repl_ref) = @_;
+    my @delayed_repl = (defined $delayed_repl_ref) ? @$delayed_repl_ref : ();
 
     # Get the expanded list of descriptors (i.e. expanded with table D)
     if (not $self->{DESCRIPTORS_EXPANDED}) {
@@ -3026,13 +3106,31 @@ sub _encode_nil_sec4 {
             $_ = $desc[$idesc+1];
             _croak "$id Erroneous replication factor"
                 unless /0310(00|01|02|11|12)/ && exists $B_table->{$_};
-            my $width = (split /\0/, $B_table->{$_})[-1];
-            # Include the delayed replication (set to 1) in bitstream
-            dec2bitstream(1, $bitstream, $pos, $width);
-
+            my $factor = 1;
+            if (@delayed_repl && /031001|2/) {
+                $factor = shift @delayed_repl;
+                croak "Delayed replication factor must be positive integer in "
+                    . "encode_nil_message, is '$factor'"
+                        if $factor !~ /^\d+$/ && $factor < 1;
+            }
+            my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$_};
+            $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name);
+            $self->_spew(3, "  %s", $factor);
+            dec2bitstream($factor, $bitstream, $pos, $width);
             $pos += $width;
-            $idesc++;
-            next D_LOOP;
+            # Include the delayed replication in descriptor list
+            splice @desc, $idesc++, 0, $_;
+
+            my @r = ();
+            push @r, @desc[($idesc+2)..($idesc+$x+1)] while $factor--;
+            $self->_spew(3, "Delayed replication ($id $_ -> @r)");
+            splice @desc, $idesc, 2+$x, @r;
+
+            if ($idesc < @desc) {
+                redo D_LOOP;
+            } else {
+                last D_LOOP;
+            }
 
         } elsif ($f == 2) {
             my $next_id = $desc[$idesc + 1];
@@ -3059,8 +3157,9 @@ sub _encode_nil_sec4 {
         my $scale_factor = $powers_of_ten[-$scale]; #10**(-$scale);
         $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
 
-        if ($station_id_ref->{$id}) {
-            my $value = $station_id_ref->{$id};
+        if ($stationid_ref->{$id}) {
+            my $value = $stationid_ref->{$id};
+            $self->_spew(3, "  %s", $value);
             if ($unit eq 'CCITTIA5') {
                 # Encode ASCII string in $width bits (left justified,
                 # padded with spaces)
@@ -3119,6 +3218,7 @@ sub _encode_bitstream {
     my @operators;
 
   S_LOOP: foreach my $isub (1..$nsubsets) {
+        $self->_spew(2, "Encoding subset number %d", $isub);
         # The data values to use for this subset
         my $data_ref = $data_refs->[$isub];
         # The descriptors from expanding section 3
@@ -3142,25 +3242,25 @@ sub _encode_bitstream {
                 _croak "$id _expand_descriptors() did not do its job"
                     if $y > 0;
 
-                $_ = $desc[$idesc+1];
+                my $next_id = $desc[$idesc+1];
                 _croak "$id Erroneous replication factor"
-                    unless /0310(00|01|02|11|12)/ && exists $B_table->{$_};
+                    unless $next_id =~ /0310(00|01|02|11|12)/ && exists $B_table->{$next_id};
                 _croak "Descriptor no $idesc is $desc_ref->[$idesc],"
-                    . " expected $_. Aborting encoding"
-                        if $desc_ref->[$idesc] != $_;
+                    . " expected $next_id. Aborting encoding"
+                        if $desc_ref->[$idesc] != $next_id;
                 my $factor = $data_ref->[$idesc];
+                my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$next_id};
+                $self->_spew(3, "%6s  %-20s  %s", $next_id, $unit, $name);
                 $self->_spew(3, "  %s", $factor);
-                my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$_};
-                $self->_spew(3, "Encoding %6s  %-20s  %s  %d  %d",
-                             $_, $unit, $name, $refval, $width);
                 ($bitstream, $pos, $maxlen)
-                    = $self->_encode_value($factor,$isub,$unit,$scale,$refval,$width,$_,$bitstream,$pos,$maxlen);
+                    = $self->_encode_value($factor,$isub,$unit,$scale,$refval,
+                                           $width,$next_id,$bitstream,$pos,$maxlen);
                 # Include the delayed replication in descriptor list
-                splice @desc, $idesc++, 0, $_;
+                splice @desc, $idesc++, 0, $next_id;
 
                 my @r = ();
                 push @r, @desc[($idesc+2)..($idesc+$x+1)] while $factor--;
-                $self->_spew(3, "Delayed replication ($id $_ -> @r)");
+                $self->_spew(3, "Delayed replication ($id $next_id -> @r)");
                 splice @desc, $idesc, 2+$x, @r;
 
                 if ($idesc < @desc) {
@@ -3267,7 +3367,6 @@ sub _encode_bitstream {
             }
 
             my $value = $data_ref->[$idesc];
-            $self->_spew(3, "  %s", defined $value ? $value : 'missing');
 
             if ($id eq '031031' and $self->{BUILD_BITMAP}) {
                 # Store the index of expanded descriptors if data is
@@ -3297,8 +3396,8 @@ sub _encode_bitstream {
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
             $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
                 && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
-            $self->_spew(3, "Encoding %6s  %-20s  %s  %d  %d",
-                         $id, $unit, $name, $refval, $width);
+            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
+            $self->_spew(3, "  %s", defined $value ? $value : 'missing');
             ($bitstream, $pos, $maxlen)
                 = $self->_encode_value($value,$isub,$unit,$scale,$refval,$width,$id,$bitstream,$pos,$maxlen);
         } # End D_LOOP
@@ -3655,8 +3754,8 @@ sub _encode_compressed_bitstream {
                     if $desc_ref->[$idesc] != $next_id;
             my $factor = $data_refs->[1][$idesc];
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$next_id};
-            $self->_spew(3, "Encoding %6s  %-20s  %s  %d  %d",
-                         $next_id, $unit, $name, $refval, $width);
+            $self->_spew(3, "%6s  %-20s  %s", $next_id, $unit, $name);
+            $self->_spew(3, "  %s", $factor);
             ($bitstream, $pos, $maxlen)
                 = $self->_encode_compressed_value($bitstream,$pos,$maxlen,
                                                   $unit,$scale,$refval,$width,
@@ -3755,8 +3854,8 @@ sub _encode_compressed_bitstream {
             my $unit = 'NUMERIC';
             my ($scale, $refval) = (0, 0);
             my $width = $self->{ADD_ASSOCIATED_FIELD};
-            $self->_spew(3, "%6s  %-20s  %s  %d  %d  %d",
-                         $id, $unit, $name, $scale, $refval, $width);
+            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
+            $self->_spew(3, "  %s", 999999);
             ($bitstream, $pos, $maxlen)
                 = $self->_encode_compressed_value($bitstream,$pos,$maxlen,
                                                   $unit,$scale,$refval,$width,
@@ -3812,9 +3911,10 @@ sub _encode_compressed_bitstream {
         _croak "Data descriptor $id is not present in BUFR table B"
             unless exists $B_table->{$id};
         my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
-        $self->_spew(3, "%6s  %-20s  %s  %d  %d  %d",
-                     $id, $unit, $name, $scale, $refval, $width);
-
+        $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
+        $self->_spew(3, "  %s", join ' ',
+                     map { defined($data_refs->[$_][$idesc]) ?
+                       $data_refs->[$_][$idesc] : 'missing'} 1..$nsubsets );
         ($bitstream, $pos, $maxlen)
             = $self->_encode_compressed_value($bitstream,$pos,$maxlen,
                                               $unit,$scale,$refval,$width,
@@ -4146,6 +4246,49 @@ sub _apply_operator_descriptor {
     return ($pos, $flow, $bm_idesc, @operators);
 }
 
+sub join_subsets {
+    my $self = shift;
+    my (@bufr, @subset_list);
+    my $last_arg_was_bufr;
+    my $num_objects = 0;
+    while (@_) {
+        my $arg = shift;
+        if (ref($arg) eq 'Geo::BUFR') {
+            $bufr[$num_objects++] = $arg;
+            $last_arg_was_bufr = 1;
+        } elsif (ref($arg) eq 'ARRAY') {
+            _croak "Wrong input (multiple array refs) to join_subsets"
+                unless $last_arg_was_bufr;
+            $subset_list[$num_objects-1] = $arg;
+            $last_arg_was_bufr = 0;
+        } else {
+            _croak "Input is not Geo::BUFR object or array ref in join_subsets";
+        }
+    }
+
+    my ($data_refs, $desc_refs);
+    my $n = 1; # Number of subsets included
+    # Ought to check for common section 3 also?
+    for (my $i=0; $i < $num_objects; $i++) {
+        $bufr[$i]->rewind();
+        my $isub = 1;
+        while (not $bufr[$i]->eof()) {
+            my ($data, $descriptors) = $bufr[$i]->next_observation();
+            if (!exists $subset_list[$i] # grab all subsets from this object
+                || grep(/^$isub$/,       # grab the subsets specified
+                        @{$subset_list[$i]})) {
+                $self->_spew(2, "Joining subset $isub from bufr object $i");
+                $data_refs->[$n] = $data;
+                $desc_refs->[$n++] = $descriptors;
+            }
+            $isub++;
+        }
+        $bufr[$i]->rewind();
+    }
+    $n--;
+    return ($data_refs, $desc_refs, $n)
+}
+
 1;  # Make sure require or use succeeds.
 
 
@@ -4206,9 +4349,9 @@ routines for encoding and decoding bitstreams are implemented in C.
 
 =head1 METHODS
 
-The C<get_> methods will return undef if the requested information
-is not available. The C<set_> methods as well as C<fopen> and
-C<fclose> will always return 1, or croak if failing.
+The C<get_> methods will return undef if the requested information is
+not available. The C<set_> methods as well as C<fopen>, C<fclose>,
+C<copy> and C<rewind> will always return 1, or croak if failing.
 
 Create a new object:
 
@@ -4216,13 +4359,12 @@ Create a new object:
   $bufr = Geo::BUFR->new($BUFRmessages);
 
 The second form of C<new> is useful if you want to provide the BUFR
-messages to decode directly as an input buffer (string). You also have
-the option of providing the BUFR messages in a file, using the no
-argument form of C<new()> and then calling C<fopen>.
-
-Copy an existing object:
-
-  $new_bufr = Geo::BUFR->clone($bufr);
+messages to decode directly as an input buffer (string). Note that
+merely calling C<new($BUFRmessages)> will not decode anything in the
+BUFR messages, for that you need to call C<next_observation()> from
+the newly created object. You also have the option of providing the
+BUFR messages in a file, using the no argument form of C<new()> and
+then calling C<fopen>.
 
 Associate the object with a file for reading of BUFR messages:
 
@@ -4239,6 +4381,20 @@ to C<new>):
 
 Returns true if end-of-file (or end of input buffer) is reached, false
 if not.
+
+  $bufr->rewind();
+
+Ensures that next call to C<next_observation> will decode first subset
+in first BUFR message.
+
+Copy from an existing object:
+
+  $bufr1->copy($bufr2);
+  $bufr1->copy($bufr2,'metadata');
+
+Copy content of the $bufr2 object into $bufr1. With no second
+argument, will copy everything, i.e. making a clone. With 'metadata'
+as second argument, will copy just the metadata in section 0, 1 and 3.
 
 Load B and D tables:
 
@@ -4455,13 +4611,18 @@ L</DECODING/ENCODING> for meaning of 'fully expanded descriptors'.
 
 Encode a NIL message:
 
-  $new_message = $bufr->encode_nil_message($station_id_ref);
+  $new_message = $bufr->encode_nil_message($stationid_ref,$delayed_repl_ref);
 
-In section 4 all values will be set to missing except delayed
-replication factors (which are all set to 1) and the (descriptor,
-value) pairs in the hashref $station_id_ref. The required metadata in
-section 0, 1 and 3 must have been set in $bufr before calling this
-method.
+$delayed_repl_ref is optional. In section 4 all values will be set to
+missing except delayed replication factors and the (descriptor, value)
+pairs in the hashref $stationid_ref. $delayed_repl_ref (if provided)
+should be a reference to an array of data values for all descriptors
+031001 and 031002 occuring in the message (these values must all be
+nonzero), e.g. [3,1,2] if there are 3 such descriptors which should
+have values 3, 1 and 2, in that succession. If $delayed_repl_ref is
+omitted, all delayed replication factors will be set to 1. The
+required metadata in section 0, 1 and 3 must have been set in $bufr
+before calling this method.
 
 Reencode BUFR message(s):
 
@@ -4474,6 +4635,37 @@ and then processed by bufrread.pl with no output modifying options set
 $decoded_messages. If bufrread.pl is to be called with C<--width
 $width>, this $width must be provided to C<reencode_message> also.
 
+Join subsets from several messages:
+
+ my ($data_refs,$desc_refs,$N) = Geo::BUFR->join_subsets($bufr_1,$subset_ref_1,
+     ... $bufr_n,$subset_ref_n);
+
+where each $subset_ref_i is optional. Will return the data and
+descriptors needed by C<encode_message> to encode a multi subset
+message, extracting the subsets from the first message of each $bufr_i
+object. All subsets in (first message of) $bufr_i will be used, unless
+next argument is an array reference $subset_ref_i, in which case only
+the subset numbers listed will be included. On return $N will contain
+the total number of subsets thus extracted. After a call to
+C<join_subsets>, the metadata (of the first message) in each object
+will be available through the C<get_>-methods, while a call to
+C<next_observation> will start extracting the first subset in the
+first message. Here is an example of use, fetching first subset from
+bufr object 1, all subsets from bufr object 2, and subset 1 and 4 from
+bufr object 3, then building up a new multi subset BUFR message (which
+will succeed only if the bufr objects all have the same descriptors in
+section 3):
+
+  my ($data_refs,$desc_refs,$N) = Geo::BUFR->join_subsets($bufr1,
+      [1],$bufr2,$bufr3,[1,4]);
+  my $new_bufr = Geo::BUFR->new();
+  # Get metadata from one of the objects, then reset those metadata
+  # which might not be correct for the new message
+  $new_bufr->copy($bufr1,'metadata');
+  $new_bufr->set_number_of_subsets($N);
+  $new_bufr->set_update_sequence_number(0);
+  $new_bufr->set_compressed_data(0);
+  my $new_message = $new_bufr->encode_message($data_refs,$desc_refs);
 
 Extract BUFR table B information for an element descriptor:
 
@@ -4527,6 +4719,9 @@ Print the content of BUFR code (or flag) table:
 where $table is (base)name of the C...TXT file containing the code
 tables, optionally followed by a default table which will be used if
 $table is not found.
+
+C<resolve_flagvalue> and <C<dump_codetable> will return empty string if
+flag value or code table is not found.
 
 
 Manipulate binary data (these are implemented in C for speed and primarily
@@ -4633,8 +4828,11 @@ debugging information if encoding fails.
 =head1 BUFR TABLE FILES
 
 The BUFR table files should follow the format and naming conventions
-used by ECMWF libbufr software. Other table file formats exist and
-might on request be supported in future versions of Geo::BUFR.
+used by ECMWF libbufr software (download from
+http://www.ecmwf.int/products/data/software/download/bufr.html, unpack
+and you will find table files in the bufrtable directory). Other table
+file formats exist and might on request be supported in future
+versions of Geo::BUFR.
 
 =head1 STRICT CHECKING
 
@@ -4659,7 +4857,7 @@ Compression set in section 1 for one subset message (BUFR reg. 94.6.3.2)
 
 =item *
 
-Local reference value for compressed character data not null bytes (94.6.3.2.i)
+Local reference value for compressed character data not having all bits set to zero (94.6.3.2.i)
 
 =item *
 

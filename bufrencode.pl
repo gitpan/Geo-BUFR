@@ -236,15 +236,15 @@ as desired:
 
   BUFR_EDITION  4
   MASTER_TABLE  0
-  CENTRE  98
+  CENTRE  88
   SUBCENTRE  0
   UPDATE_SEQUENCE_NUMBER  0
   OPTIONAL_SECTION  0
   DATA_CATEGORY  0
-  INT_DATA_SUBCATEGORY  0
+  INT_DATA_SUBCATEGORY  2
   LOC_DATA_SUBCATEGORY  255
-  MASTER_TABLE_VERSION  13
-  LOCAL_TABLE_VERSION  1
+  MASTER_TABLE_VERSION  14
+  LOCAL_TABLE_VERSION  0
   YEAR  2008
   MONTH  9
   DAY  1
@@ -292,9 +292,9 @@ neither should this line be numbered, e.g.
    162  031031                0
 ...
 
-To encode a NIL subset, all delayed replication factors should be set
-to 1, and all other values set to missing except for the descriptors
-defining the station.
+To encode a NIL subset, all delayed replication factors should be
+nonzero, and all other values set to missing except for the
+descriptors defining the station.
 
 Options may be abbreviated, e.g. C<--h> or C<-h> for C<--help>
 

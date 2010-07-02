@@ -14,13 +14,33 @@ To install this module type the following:
    make test
    make install
 
+This will install the module in the standard locations. You will most
+probably require root privileges to install in standard system
+directories. To install in a non-standard directory like /home/cpan,
+specify a prefix during the 'perl Makefile.PL' stage:
+
+   perl Makefile.PL PREFIX=/home/cpan
+
+After installing, in order for Perl to find the module when executing
+programs, you are adviced to modify the environment variable $PERL5LIB,
+e.g.
+
+   export PERL5LIB=/home/cpan/lib/perl/5.8.4:$PERL5LIB
+
+(or the corresponding command for your operating system and Perl version).
+
+You will need a C compiler which supports variable length arrays. This
+is standard on Unix-like systems. On Windows I recommend using
+Strawberry Perl, in which case you should type 'dmake' instead of
+'make' when installing.
+
 DEPENDENCIES
 
-This module requires these other modules (of which all but File::Slurp
-are expected to be part of a standard Perl distribution)
+This module requires these other modules (of which all except possibly
+File::Slurp are expected to be part of a standard Perl distribution)
 
 Carp, Config, DynaLoader, FileHandle, File::Slurp, File::Spec::Functions,
-Getopt::Long, Pod::Usage, Test::More, Time::Local
+Getopt::Long, Pod::Usage, Storable, Test::More, Time::Local
 
 DESCRIPTION
 

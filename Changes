@@ -1,5 +1,12 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.15 2010-07-02
+- clone() replaced with copy() with somewhat different syntax.
+- New methods rewind() and join_subsets().
+- Added optional parameter to encode_nil_message() making it possible
+  to set delayed replication factors > 1.
+- Default tables for utility programs changed to master table version 14.
+
 1.14  2010-05-18
 - Apply binmode to filehandle in fopen.
 - Added two more methods for extracting info from BUFR B and D tables.

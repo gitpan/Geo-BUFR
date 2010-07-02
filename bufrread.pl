@@ -27,7 +27,7 @@ use Geo::BUFR;
 # Will be used if neither --tablepath nor $ENV{BUFR_TABLES} is set
 use constant DEFAULT_TABLE_PATH => '/usr/local/lib/bufrtables';
 # Ought to be your most up-to-date C table
-use constant DEFAULT_CTABLE => 'C0000000000098013001';
+use constant DEFAULT_CTABLE => 'C0000000000000014000';
 
 # Parse command line options
 my %option = ();
@@ -163,12 +163,6 @@ sub decode {
             next READLOOP;
         }
 
-        if ($option{param}) {
-            # Reduce data and descriptors to those requested only
-            ($data, $descriptors)
-                = param($data, $descriptors, @requested_desc);
-        }
-
         if ($option{codetables}) {
             # Load C table, trying first to use same table version as
             # the B and D tables loaded in next_observation, or if
@@ -176,7 +170,7 @@ sub decode {
             # instead.
             my $table_version = $bufr->get_table_version();
             $bufr->load_Ctable("C$table_version", DEFAULT_CTABLE);
-    }
+        }
 
         my $current_subset_number = $bufr->get_current_subset_number();
         my $nsubsets = $bufr->get_number_of_subsets();
@@ -217,6 +211,12 @@ sub decode {
                 print $OUT $bufr->dumpsection3();
                 $section013_dumped = 1;
             }
+        }
+
+        if ($option{param}) {
+            # Reduce data and descriptors to those requested only
+            ($data, $descriptors)
+                = param($data, $descriptors, @requested_desc);
         }
 
         # If this is last message and there is a BUFR formatting
@@ -276,12 +276,18 @@ sub read_filter_file {
     open my $fh, '<', $filter_file
         or die "Cannot open $filter_file: $!";
     while (<$fh>) {
-        # Remove comments
+        # Remove comments and skip blank lines
         s/#.*//;
-        next if /^$/;
+        next if /^\s*$/;
 
         if (s/^\s*D(!)?://) {
             my @desc = split;
+            # Check that all descriptors are numbers
+            foreach my $desc (@desc) {
+                die "'$desc' cannot be a descriptor in line $. in filter file '$filter_file'"
+                    if $desc !~/^\d+$/;
+            }
+            # Save the criterium
             $num_desc[++$num_criteria] = @desc;
             $num_val[$num_criteria] = 0;
             $fid[$num_criteria] = \@desc;
@@ -426,7 +432,7 @@ examples of use.
                    is [CODE TABLE] or [FLAG TABLE]
    --data_only     Print section 4 (data section) only
    --param <descriptor file>
-                   Decode parameters with descriptors in <descriptor file> only
+                   Display parameters with descriptors in <descriptor file> only
    --filter <filter file>
                    Decode observations meeting criteria in <filter file> only
    --bitmap        Display bit mapped values on same line
@@ -459,9 +465,8 @@ BUFR tables are located (unless the default path provided by
 bufralter.pl works for you).
 
 Each line in <descriptor file> should start with a BUFR descriptor (6
-digits).  Rest of line will be ignored. bufrread will extract values
-for these descriptors only. If used together with C<--filter>,
-<descriptor file> must contain all descriptors in <filter file>.
+digits).  Rest of line will be ignored. bufrread.pl will display values
+for these descriptors only.
 
 Using C<--filter> will decode only those observations that meet one of
 the criteria in <filter file> (and all of those criteria marked
@@ -484,7 +489,7 @@ specific WMO stations and one specific ship, all of which having hour
 (004004) equal to 6 or 7.  If there is no value line after a
 descriptor line, it is enough that the observation contains the
 descriptor(s), whatever the values are. So to extract all ship
-messages from a BUFR synop file, the filter file should contain this
+messages from a BUFR SYNOP file, the filter file should contain this
 single line only:
 
   D: 001011

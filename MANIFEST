@@ -33,6 +33,7 @@ t/IOZX11_LFVW_060300.err
 t/IOZX11_LFVW_060300.txt_1
 t/IOZX11_LFVW_060300.txt_2
 t/IOZX11_LFVW_060300.warn
+t/bufr3subset.dat
 t/change_refval.bufr
 t/change_refval.txt
 t/change_refval_compressed.bufr
@@ -43,6 +44,7 @@ t/encoded_ed4
 t/filter
 t/flag.txt
 t/illegal_flag.txt
+t/join.bufr
 t/metadata.txt_ed3
 t/metadata.txt_ed4
 t/noexpand.txt
