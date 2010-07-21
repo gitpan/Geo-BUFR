@@ -452,7 +452,7 @@ examples of use.
    --all_operators Show all operator descriptors when printing section 4
    --tablepath <path to BUFR tables>
                    Set path to BUFR tables (overrides ENV{BUFR_TABLES})
-   --verbose n     Set verbose level to n, 0<=n<=3 (default 0). n=1 will
+   --verbose n     Set verbose level to n, 0<=n<=5 (default 0). n=1 will
                    show the tables loaded.
    --help          Display Usage and explain the options used. For even
                    more info you might prefer to consult perldoc bufrread.pl

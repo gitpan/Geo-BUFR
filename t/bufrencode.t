@@ -37,7 +37,7 @@ my $stationid_ref = {
                      '001015' => 'BLINDERN',
                  };
 my $new_bufr = Geo::BUFR->new();
-$new_bufr->copy($bufr3,'metadata');
+$new_bufr->copy_from($bufr3,'metadata');
 $new_bufr->set_number_of_subsets(1);
 $new_bufr->set_compressed_data(0);
 my $nil_msg = $new_bufr->encode_nil_message($stationid_ref,[2,3]);
@@ -48,7 +48,7 @@ Geo::BUFR->set_verbose(3);
 my ($data_refs,$desc_refs,$N) =
     Geo::BUFR->join_subsets($bufr3,[1,3],$nil_bufr);
 my $join_bufr = Geo::BUFR->new();
-$join_bufr->copy($bufr3,'metadata');
+$join_bufr->copy_from($bufr3,'metadata');
 $join_bufr->set_number_of_subsets($N);
 $join_bufr->set_compressed_data(0);
 my $new_message = $join_bufr->encode_message($data_refs,$desc_refs);

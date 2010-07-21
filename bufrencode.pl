@@ -214,7 +214,7 @@ examples of use.
                          n=2 (default) Croak if (recoverable) error in BUFR format.
                              Nothing more in this message will be encoded.
 
-   --verbose n           Set verbose level to n, 0<=n<=3 (default 0).
+   --verbose n           Set verbose level to n, 0<=n<=5 (default 0).
                          Verbose output is sent to STDOUT, so ought to
                          be combined with option --outfile
 

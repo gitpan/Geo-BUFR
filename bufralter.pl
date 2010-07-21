@@ -170,7 +170,7 @@ sub alter {
         my $nsubsets = $bufr->get_number_of_subsets();
 
         if ($isub == 1) {
-            $new_bufr->copy($bufr,'metadata');
+            $new_bufr->copy_from($bufr,'metadata');
             @subset_data = ();
             @subset_desc = ();
 
@@ -420,7 +420,7 @@ additional info.
                              decoded/encoded.
    --tablepath <path to BUFR tables>
                     Set path to BUFR tables (overrides $ENV{BUFR_TABLES})
-   --verbose n      Set verbose level to n, 0<=n<=3 (default 0). Verbose
+   --verbose n      Set verbose level to n, 0<=n<=5 (default 0). Verbose
                     output is sent to STDOUT, so ought to be combined with
                     option --outfile
    --help           Display Usage and explain the options used. Almost
