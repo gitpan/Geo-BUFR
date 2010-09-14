@@ -1,5 +1,8 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.17 2010-09-14
+- Data description operator 208Y implemented
+
 1.16 2010-07-21
 - Strip trailing nulls from CCITTIA5 data.
 - dumpsections() now takes optional argument for controlling width and

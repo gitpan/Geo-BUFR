@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 5;
+use Test::More tests => 6;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -36,3 +36,9 @@ $output = read_file('t/out');
 $expected = read_file('t/change_refval_compressed.bufr');
 unlink 't/out';
 is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 203Y (compressed)');
+
+`$perl ./bufr_reencode.pl t/208035.txt -w 35 -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/208035.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 208Y');

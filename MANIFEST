@@ -19,6 +19,8 @@ t/bufrresolve.t
 t/1xBUFRSYNOP-ed4.bufr
 t/1xBUFRSYNOP-ed4.bufr_altered
 t/1xBUFRSYNOP-ed4.txt
+t/208035.bufr
+t/208035.txt
 t/307080.data_2
 t/307080.partial
 t/307080.simple

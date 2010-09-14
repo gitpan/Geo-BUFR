@@ -83,7 +83,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.16';
+our $VERSION = '1.17';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -612,14 +612,12 @@ sub set_observed_data {
         unless defined $observed_data;
     _croak "Observed data must be 0 or 1, is '$observed_data'"
         unless $observed_data eq '0' or $observed_data eq '1';
-    $self->{OBSERVED_DATA} = $observed_data ? 128 : 0; # 128 = 2**8
+    $self->{OBSERVED_DATA} = $observed_data;
     return 1;
 }
 sub get_observed_data {
     my $self = shift;
-    return defined $self->{OBSERVED_DATA}
-        ? vec( $self->{OBSERVED_DATA},0,1 )
-            : undef;
+    return defined $self->{OBSERVED_DATA} ? $self->{OBSERVED_DATA} : undef;
 }
 sub set_compressed_data {
     my ($self, $compressed_data) = @_;
@@ -630,14 +628,12 @@ sub set_compressed_data {
     _complain "Not allowed to use compression for one subset messages!"
         if $compressed_data
             and defined $self->{NUM_SUBSETS} and $self->{NUM_SUBSETS} == 1;
-    $self->{COMPRESSED_DATA} = $compressed_data ? 64 : 0; # 64 = 2**7
+    $self->{COMPRESSED_DATA} = $compressed_data;
     return 1;
 }
 sub get_compressed_data {
     my $self = shift;
-    return defined $self->{COMPRESSED_DATA}
-        ? vec($self->{COMPRESSED_DATA},1,1)
-            : undef;
+    return defined $self->{COMPRESSED_DATA} ? $self->{COMPRESSED_DATA} : undef;
 }
 sub set_descriptors_unexpanded {
     my ($self, $descriptors_unexpanded) = @_;
@@ -1144,7 +1140,7 @@ sub _decode_sections {
         $self->{SUBCENTRE}            = $sec1[2];
         $self->{CENTRE}               = $sec1[3];
         $self->{UPDATE_NUMBER}        = $sec1[4];
-        $self->{OPTIONAL_SECTION}     = $sec1[5] & 0x80;
+        $self->{OPTIONAL_SECTION}     = vec($sec1[5] & 0x80,0,1); # 1. bit
         $self->{DATA_CATEGORY}        = $sec1[6];
         $self->{DATA_SUBCATEGORY}     = $sec1[7];
         $self->{MASTER_TABLE_VERSION} = $sec1[8];
@@ -1173,7 +1169,7 @@ sub _decode_sections {
         $self->{CENTRE}               = $sec1[2];
         $self->{SUBCENTRE}            = $sec1[3];
         $self->{UPDATE_NUMBER}        = $sec1[4];
-        $self->{OPTIONAL_SECTION}     = $sec1[5] & 0x80;
+        $self->{OPTIONAL_SECTION}     = vec($sec1[5] & 0x80,0,1); # 1. bit
         $self->{DATA_CATEGORY}        = $sec1[6];
         $self->{INT_DATA_SUBCATEGORY} = $sec1[7];
         $self->{LOC_DATA_SUBCATEGORY} = $sec1[8];
@@ -1187,6 +1183,8 @@ sub _decode_sections {
         $self->{SECOND}               = $sec1[16];
         $self->{LOCAL_USE}            = $sec1[17] if $sec1[0] > 22;
     }
+    $self->_spew(3, "BUFR edition: %d Optional section: %d Update sequence number: %d",
+                $self->{BUFR_EDITION}, $self->{OPTIONAL_SECTION}, $self->{UPDATE_NUMBER});
 
     $self->_validate_datetime() if ($Strict_checking);
 
@@ -1234,8 +1232,10 @@ sub _decode_sections {
 
     $self->{SEC3}             = \@sec3;
     $self->{NUM_SUBSETS}      = $sec3[2];
-    $self->{OBSERVED_DATA}    = $sec3[3] & 0x80; # extraxt 1. bit in the 2 byte sec3[3]
-    $self->{COMPRESSED_DATA}  = $sec3[3] & 0x40; # extract 2. bit
+    $self->{OBSERVED_DATA}    = vec($sec3[3] & 0x80,0,1); # extract 1. bit
+    $self->{COMPRESSED_DATA}  = vec($sec3[3] & 0x40,1,1); # extract 2. bit
+    $self->_spew(3, "Number of subsets: %d Observed data: %d Compressed data: %d",
+                 $self->{NUM_SUBSETS}, $self->{OBSERVED_DATA}, $self->{COMPRESSED_DATA});
 
     ##  Decode Section 4 (Data Section)  ##
 
@@ -1304,6 +1304,7 @@ sub _next_message {
     # Get the data descriptors and expand them
     my @unexpanded = _int2fxy(unpack 'n*', $self->{SEC3}[4]);
     $self->{DESCRIPTORS_UNEXPANDED} = join ' ', @unexpanded;
+    $self->_spew(3, "Unexpanded data descriptors: %s", $self->{DESCRIPTORS_UNEXPANDED});
 
     $self->_spew(2, "Expanding data descriptors");
     my $alias = "$table_version " . $self->{DESCRIPTORS_UNEXPANDED};
@@ -1356,6 +1357,7 @@ sub next_observation {
         # Some more tidying after decoding of previous message might
         # be necessary
         undef $self->{CHANGE_WIDTH};
+        undef $self->{CHANGE_CCITTIA5_WIDTH};
         undef $self->{CHANGE_SCALE};
         undef $self->{CHANGE_REFERENCE};
         undef $self->{NEW_REFVAL_OF};
@@ -1445,7 +1447,7 @@ Section 1:
     Originating subcentre:             $self->{SUBCENTRE}
     Originating centre:                $self->{CENTRE}
     Update sequence number:            $self->{UPDATE_NUMBER}
-    Optional section present:          @{[vec ($self->{OPTIONAL_SECTION},0,1)]}
+    Optional section present:          $self->{OPTIONAL_SECTION}
     Data category (table A):           $self->{DATA_CATEGORY}
     Data subcategory:                  $self->{DATA_SUBCATEGORY}
     Master table version number:       $self->{MASTER_TABLE_VERSION}
@@ -1465,7 +1467,7 @@ Section 1:
     Originating centre:                $self->{CENTRE}
     Originating subcentre:             $self->{SUBCENTRE}
     Update sequence number:            $self->{UPDATE_NUMBER}
-    Optional section present:          @{[vec ($self->{OPTIONAL_SECTION},0,1)]}
+    Optional section present:          $self->{OPTIONAL_SECTION}
     Data category (table A):           $self->{DATA_CATEGORY}
     International data subcategory:    $self->{INT_DATA_SUBCATEGORY}
     Local data subcategory:            $self->{LOC_DATA_SUBCATEGORY}
@@ -1517,8 +1519,8 @@ sub dumpsection3 {
 Section 3:
     Length of section:                 @{[ length $self->{SEC3_STREAM} ]}
     Number of data subsets:            $self->{NUM_SUBSETS}
-    Observed data:                     @{[vec ($self->{OBSERVED_DATA},0,1)]}
-    Compressed data:                   @{[vec ($self->{COMPRESSED_DATA},1,1)]}
+    Observed data:                     $self->{OBSERVED_DATA}
+    Compressed data:                   $self->{COMPRESSED_DATA}
     Data descriptors unexpanded:       $self->{DESCRIPTORS_UNEXPANDED}
 EOF
     return $txt;
@@ -2265,6 +2267,8 @@ sub _decode_bitstream {
 
             # Override Table B values if Data Description Operators are in effect
             $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+            $width = $self->{CHANGE_CCITTIA5_WIDTH}
+                if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
             $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
             # To prevent autovivification (see perlodc -f exists) we
             # need this laborious test for defined
@@ -2553,6 +2557,8 @@ sub _extract_compressed_value {
 
         # Override Table B values if Data Description Operators are in effect
         $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+        $width = $self->{CHANGE_CCITTIA5_WIDTH}
+            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
         $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
         $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
         # Difference statistical values use different width and reference value
@@ -2716,6 +2722,7 @@ sub reencode_message {
         # Some tidying after decoding of previous message might be
         # necessary
         undef $self->{CHANGE_WIDTH};
+        undef $self->{CHANGE_CCITTIA5_WIDTH};
         undef $self->{CHANGE_SCALE};
         undef $self->{CHANGE_REFERENCE};
         undef $self->{NEW_REFVAL_OF};
@@ -2928,7 +2935,7 @@ sub _encode_sec1 {
             $self->{SUBCENTRE},
             $self->{CENTRE},
             $self->{UPDATE_NUMBER},
-            $self->{OPTIONAL_SECTION},
+            $self->{OPTIONAL_SECTION} ? 128 : 0,
             $self->{DATA_CATEGORY},
             $self->{DATA_SUBCATEGORY},
             $self->{MASTER_TABLE_VERSION},
@@ -2945,7 +2952,7 @@ sub _encode_sec1 {
             $self->{CENTRE},
             $self->{SUBCENTRE},
             $self->{UPDATE_NUMBER},
-            $self->{OPTIONAL_SECTION},
+            $self->{OPTIONAL_SECTION} ? 128 : 0,
             $self->{DATA_CATEGORY},
             $self->{INT_DATA_SUBCATEGORY},
             $self->{LOC_DATA_SUBCATEGORY},
@@ -3000,18 +3007,14 @@ sub _encode_sec3 {
             unless defined $self->{$key};
     }
 
-    my $nsubsets = $self->{NUM_SUBSETS};
-    my $observed_data = $self->{OBSERVED_DATA};
-    my $compressed_data = $self->{COMPRESSED_DATA};
     my @desc = split / /, $self->{DESCRIPTORS_UNEXPANDED};
 
     # Byte 5-6
-    my $nsubsets_binary = pack "n", $nsubsets;
+    my $nsubsets_binary = pack "n", $self->{NUM_SUBSETS};
 
     # Byte 7
-    my $flag = "\0";
-    vec($flag, 7, 1) = $observed_data ? 1 : 0;
-    vec($flag, 6, 1) = $compressed_data ? 1 : 0;
+    my $flag = pack 'C', $self->{OBSERVED_DATA}*128 +
+                         $self->{COMPRESSED_DATA}*64;
 
     # Byte 8-
     my $desc_binary = "\0\0" x @desc;
@@ -3200,6 +3203,8 @@ sub _encode_nil_sec4 {
 
         # Override Table B values if Data Description Operators are in effect
         $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+        $width = $self->{CHANGE_CCITTIA5_WIDTH}
+            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
         _croak "$id Data width <= 0" if $width <= 0;
         $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
         my $scale_factor = $powers_of_ten[-$scale]; #10**(-$scale);
@@ -3502,6 +3507,8 @@ sub _encode_value {
     # effect (except for associated fields)
     if ($id != 999999) {
         $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+        $width = $self->{CHANGE_CCITTIA5_WIDTH}
+            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
         _croak "$id Data width is $width which is <= 0" if $width <= 0;
         $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
             $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
@@ -3600,6 +3607,8 @@ sub _encode_compressed_value {
     # effect (except for associated fields)
     if ($id != 999999) {
         $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+        $width = $self->{CHANGE_CCITTIA5_WIDTH}
+            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
         _croak "$id Data width <= 0" if $width <= 0;
         $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
         $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
@@ -4132,7 +4141,7 @@ sub _apply_operator_descriptor {
     my $bm_idesc = '';
 
     $_ = $id;
-    if (/^20[123]000/) {
+    if (/^20[1238]000/) {
         # Cancellation of a data descriptor operator
         _complain("$id Cancelling unused operator")
             unless grep {$_ == $x} @operators;
@@ -4141,9 +4150,10 @@ sub _apply_operator_descriptor {
             $x == 1 and undef $self->{CHANGE_WIDTH}, last SWITCH;
             $x == 2 and undef $self->{CHANGE_SCALE}, last SWITCH;
             $x == 3 and undef $self->{NEW_REFVAL_OF}, last SWITCH;
+            $x == 8 and undef $self->{CHANGE_CCITTIA5_WIDTH}, last SWITCH;
         }
         $self->_spew(4, "$id * Reset ".
-                     ("data width","scale","reference values")[$x-1]);
+                     ("width of CCITTIA5 field","data width","scale","reference values",)[$x % 8]);
         $flow = 'next';
     } elsif (/^201/) {
         # Change data width
@@ -4209,6 +4219,16 @@ sub _apply_operator_descriptor {
             $flow = 'skip';
         }
 
+    } elsif (/^207/) {
+        # Increase scale, reference value and data width
+        _croak "$id Increase scale, reference value and data width (not implemented)";
+    } elsif (/^208/) {
+        # Change data width for ascii data
+        $self->{CHANGE_CCITTIA5_WIDTH} = $y*8;
+        $self->_spew(4, "$id * Change width for CCITTIA5 field: "
+                     . "%d bytes", $y);
+        push @operators, $x;
+        $flow = 'next';
     } elsif (/^222000/) {
         # Quality information follows
         push @{ $self->{BITMAP_OPERATORS} }, '222000';
