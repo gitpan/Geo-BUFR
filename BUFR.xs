@@ -121,7 +121,7 @@ bitstream2ascii(unsigned char *bitstream, int bitpos, int len)
             XSRETURN_UNDEF;
         }
 
-        ascii = newSVpv(str, len);
+        ascii = newSVpv((char*)str, len);
         RETVAL = ascii;
 
     OUTPUT:
@@ -167,7 +167,7 @@ dec2bitstream(unsigned long word, \
         num_encodedbits += 8;
       }
       /* Finally pad last encoded byte in bitstream with one bits */
-      num_onebits = 8 - (startbit + wordlength) & 0x07;
+      num_onebits = (8 - (startbit + wordlength)) & 0x07;
       bitstream[octet] |= SetLastBits[num_onebits];
     } else {
       /* When aligning word with bitstream[octet], we will in this
@@ -251,6 +251,6 @@ null2bitstream(unsigned char *bitstream, \
             bits += 8;
           }
           /* Finally pad last encoded byte in bitstream with one bits */
-          num_onebits = 8 - (startbit + wordlength) & 0x07;
+          num_onebits = (8 - (startbit + wordlength)) & 0x07;
           bitstream[octet] |= SetLastBits[num_onebits];
         }

@@ -1,21 +1,21 @@
-BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 147
+BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 142
 
 In message 1 contained in bulletin with ahl IOZX11 LFVW 052100 CCR
-BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 147
+BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 142
 
 In message 2 contained in bulletin with ahl IOZX11 LFVW 052100 CCS
-BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 147
+BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 142
 
 In message 3 contained in bulletin with ahl IOZX11 LFVW 051800 CCX
-BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 147
+BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 142
 
 In message 4 contained in bulletin with ahl IOZX11 LFVW 060000 CCC
-BUFR.pm ERROR: CCITTIA5 minval not all bits set to zero but '000000000000' at ./bufrread.pl line 147
+BUFR.pm ERROR: CCITTIA5 minval not all bits set to zero but '000000000000' at ./bufrread.pl line 142
 
 In message 5 contained in bulletin with ahl IOZX11 LFVW 060000 CCD
-BUFR.pm ERROR: CCITTIA5 minval not all bits set to zero but '000000000000' at ./bufrread.pl line 147
+BUFR.pm ERROR: CCITTIA5 minval not all bits set to zero but '000000000000' at ./bufrread.pl line 142
 
 In message 7 contained in bulletin with ahl IOZX11 LFVW 060300
-BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 147
+BUFR.pm ERROR: Compression set in section 1 for one subset message at ./bufrread.pl line 142
 
 In message 9 contained in bulletin with ahl IOZX11 LFVW 052100 CCT

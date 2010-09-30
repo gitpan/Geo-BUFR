@@ -38,15 +38,14 @@ my $stationid_ref = {
                  };
 my $new_bufr = Geo::BUFR->new();
 $new_bufr->copy_from($bufr3,'metadata');
-$new_bufr->set_number_of_subsets(1);
-$new_bufr->set_compressed_data(0);
+# Encode nil_message with delayed replication factors set to 2,3
 my $nil_msg = $new_bufr->encode_nil_message($stationid_ref,[2,3]);
 my $nil_bufr = Geo::BUFR->new($nil_msg);
 
-# Then join the nil message with subset 1 and 3 from $bufr3
+# Then join the nil message with subset 3 and 1 from $bufr3
 Geo::BUFR->set_verbose(3);
 my ($data_refs,$desc_refs,$N) =
-    Geo::BUFR->join_subsets($bufr3,[1,3],$nil_bufr);
+    Geo::BUFR->join_subsets($bufr3,[3,1],$nil_bufr);
 my $join_bufr = Geo::BUFR->new();
 $join_bufr->copy_from($bufr3,'metadata');
 $join_bufr->set_number_of_subsets($N);

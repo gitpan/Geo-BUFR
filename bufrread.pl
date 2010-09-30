@@ -55,10 +55,8 @@ pod2usage(-verbose => 1) if $option{help};
 # Make sure there is at least one input file
 pod2usage(-verbose => 0) unless @ARGV;
 
-# Set verbosity level for the BUFR module. Must be set also for each
-# BUFR object generated
-my $verbose = $option{verbose} ? $option{verbose} : 0;
-Geo::BUFR->set_verbose($verbose);
+# Set verbosity level
+Geo::BUFR->set_verbose($option{verbose}) if $option{verbose};
 
 # Set whether quality information should be decoded for the BUFR module
 Geo::BUFR->set_noqc() if ($option{noqc});
@@ -113,9 +111,6 @@ my $sec2_code_ref = sub {return '    Hex dump:'.' 'x26 . unpack('H*',substr(shif
 # Loop for processing of BUFR input files
 foreach my $inputfname ( @ARGV ) {
     my $bufr = Geo::BUFR->new();
-
-    # This sets object verbose level equal to class verbose level
-    $bufr->set_verbose($verbose);
 
     # Open BUFR file
     $bufr->fopen($inputfname);

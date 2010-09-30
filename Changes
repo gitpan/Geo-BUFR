@@ -1,5 +1,10 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.18 2010-09-30
+- join_subsets altered to always respect order of subsets specified
+- encode_nil_message altered to set number of subsets and data
+  compression to 0, saving user from remembering this
+
 1.17 2010-09-14
 - Data description operator 208Y implemented
 

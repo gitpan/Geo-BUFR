@@ -83,7 +83,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.17';
+our $VERSION = '1.18';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -141,7 +141,12 @@ sub _complain {
 sub _spew {
     my $self = shift;
     my $level = shift;
-    return unless $level <= (ref($self) ? $self->{VERBOSE} : $Verbose);
+    if (ref($self)) {
+        # Global $Verbose overrides object VERBOSE
+        return if $level > $self->{VERBOSE} && $level > $Verbose;
+    } else {
+        return if $level > $Verbose;
+    }
     my $format = shift;
     if (@_) {
         printf "BUFR.pm: $format\n", @_;
@@ -242,7 +247,7 @@ sub set_verbose {
     if (ref($self)) {
         # Just myself
         $self->{VERBOSE} = shift;
-        $self->_spew(2, "Verbosity level set to $self->{VERBOSE}");
+        $self->_spew(2, "Verbosity level for object set to $self->{VERBOSE}");
     } else {
         # Whole class
         $Verbose = shift;
@@ -3001,8 +3006,8 @@ sub _encode_sec3 {
     my $self = shift;
 
     # Check that the required variables for section 3 are provided
-    foreach my $key qw( NUM_SUBSETS OBSERVED_DATA COMPRESSED_DATA
-                        DESCRIPTORS_UNEXPANDED ) {
+    foreach my $key (qw(NUM_SUBSETS OBSERVED_DATA COMPRESSED_DATA
+                        DESCRIPTORS_UNEXPANDED)) {
         _croak "_encode_sec3: $key not given"
             unless defined $self->{$key};
     }
@@ -3085,6 +3090,12 @@ sub encode_nil_message {
 
     my $bufr_edition = $self->{BUFR_EDITION} or
         _croak "encode_nil_message: BUFR edition not defined";
+
+    # Since a nil message necessarily is a one subset message, some
+    # metadata might need to be adjusted (saving the user for having
+    # to remember this)
+    $self->set_number_of_subsets(1);
+    $self->set_compressed_data(0);
 
     $self->load_BDtables();
 
@@ -4134,6 +4145,18 @@ sub _maximum {
     return $max;
 }
 
+## Return index of first occurrence av $value in $list, undef if no match
+sub _get_index_in_list {
+    my ($list, $value) = @_;
+    for (my $i=0; $i <= $#{$list}; $i++) {
+        if ($list->[$i] eq $value) { # Match
+            return $i;
+        }
+    }
+    # No match
+    return undef;
+}
+
 sub _apply_operator_descriptor {
     my $self = shift;
     my ($id, $x, $y, $pos, $next_id, @operators) = @_;
@@ -4325,6 +4348,10 @@ sub _apply_operator_descriptor {
     return ($pos, $flow, $bm_idesc, @operators);
 }
 
+## Extract data from selected subsets in selected bufr objects, joined
+## into a single ($data_refs, $desc_refs), to later be able to make a
+## single BUFR message by calling encode_message. Also returns number
+## of subsets extracted.
 sub join_subsets {
     my $self = shift;
     my (@bufr, @subset_list);
@@ -4351,16 +4378,31 @@ sub join_subsets {
     for (my $i=0; $i < $num_objects; $i++) {
         $bufr[$i]->rewind();
         my $isub = 1;
-        while (not $bufr[$i]->eof()) {
-            my ($data, $descriptors) = $bufr[$i]->next_observation();
-            if (!exists $subset_list[$i] # grab all subsets from this object
-                || grep(/^$isub$/,       # grab the subsets specified
-                        @{$subset_list[$i]})) {
+        if (!exists $subset_list[$i]) { # grab all subsets from this object
+            while (not $bufr[$i]->eof()) {
+                my ($data, $descriptors) = $bufr[$i]->next_observation();
                 $self->_spew(2, "Joining subset $isub from bufr object $i");
                 $data_refs->[$n] = $data;
                 $desc_refs->[$n++] = $descriptors;
+                $isub++;
             }
-            $isub++;
+        } else { # grab the subsets specified, also inserting them in the specified order
+            my $num_found = 0;
+            while (not $bufr[$i]->eof()) {
+                my ($data, $descriptors) = $bufr[$i]->next_observation();
+                my $index = _get_index_in_list($subset_list[$i], $isub);
+                if (defined $index) {
+                    $self->_spew(2, "Joining subset $isub from bufr object $i");
+                    $data_refs->[$n + $index] = $data;
+                    $desc_refs->[$n + $index] = $descriptors;
+                    $num_found++;
+                }
+                $isub++;
+            }
+            _croak "Mismatch between number of subsets found ($num_found) and "
+                . "expected from argument [@{$subset_list[$i]}] to join_subsets"
+                    if $num_found != @{$subset_list[$i]};
+            $n += $num_found;
         }
         $bufr[$i]->rewind();
     }
@@ -4711,7 +4753,9 @@ nonzero), e.g. [3,1,2] if there are 3 such descriptors which should
 have values 3, 1 and 2, in that succession. If $delayed_repl_ref is
 omitted, all delayed replication factors will be set to 1. The
 required metadata in section 0, 1 and 3 must have been set in $bufr
-before calling this method.
+before calling this method (although number of subsets and BUFR
+compression will automatically be set to 0 whatever value they had
+before).
 
 Reencode BUFR message(s):
 
@@ -4734,19 +4778,19 @@ descriptors needed by C<encode_message> to encode a multi subset
 message, extracting the subsets from the first message of each $bufr_i
 object. All subsets in (first message of) $bufr_i will be used, unless
 next argument is an array reference $subset_ref_i, in which case only
-the subset numbers listed will be included. On return $nsub will contain
-the total number of subsets thus extracted. After a call to
-C<join_subsets>, the metadata (of the first message) in each object
-will be available through the C<get_>-methods, while a call to
-C<next_observation> will start extracting the first subset in the
-first message. Here is an example of use, fetching first subset from
-bufr object 1, all subsets from bufr object 2, and subset 1 and 4 from
-bufr object 3, then building up a new multi subset BUFR message (which
-will succeed only if the bufr objects all have the same descriptors in
-section 3):
+the subset numbers listed will be included, in the order specified. On
+return $nsub will contain the total number of subsets thus
+extracted. After a call to C<join_subsets>, the metadata (of the first
+message) in each object will be available through the C<get_>-methods,
+while a call to C<next_observation> will start extracting the first
+subset in the first message. Here is an example of use, fetching first
+subset from bufr object 1, all subsets from bufr object 2, and subsets
+4 and 2 from bufr object 3, then building up a new multi subset BUFR
+message (which will succeed only if the bufr objects all have the same
+descriptors in section 3):
 
   my ($data_refs,$desc_refs,$nsub) = Geo::BUFR->join_subsets($bufr1,
-      [1],$bufr2,$bufr3,[1,4]);
+      [1],$bufr2,$bufr3,[4,2]);
   my $new_bufr = Geo::BUFR->new();
   # Get metadata from one of the objects, then reset those metadata
   # which might not be correct for the new message

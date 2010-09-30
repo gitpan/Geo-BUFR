@@ -56,10 +56,8 @@ my $strict_checking = defined $option{strict_checking}
     ? $option{strict_checking} : 2;
 Geo::BUFR->set_strict_checking($strict_checking);
 
-# Set verbosity level for the BUFR module. Must be set also for each
-# BUFR object generated
-my $verbose = $option{verbose} ? $option{verbose} : 0;
-Geo::BUFR->set_verbose($verbose);
+# Set verbosity level
+Geo::BUFR->set_verbose($option{verbose}) if $option{verbose};
 
 # Set BUFR table path
 if ($option{tablepath}) {
@@ -74,9 +72,6 @@ if ($option{tablepath}) {
 }
 
 my $bufr = Geo::BUFR->new();
-
-# This sets object verbose level equal to class verbose level
-$bufr->set_verbose($verbose);
 
 # Read metadata into $bufr
 read_metadata($metadata_file, $bufr);
