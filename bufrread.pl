@@ -351,6 +351,7 @@ sub filter_observation {
                     # loop through all data in subset:
                     for (my $j = 0; $j < @{$descriptors}; $j++) {
                         if ($descriptors->[$j] == $filter_desc) {
+                            next DESC if !defined $data->[$j];
                             (my $val = $data->[$j]) =~ s/^\s*(.*?)\s*$/$1/;
                             if ($val eq $fiv[$filter_criterion]->[$line]->[$idesc]) {
                                 $nmatch++; # Matched!

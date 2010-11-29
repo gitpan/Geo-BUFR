@@ -1,12 +1,17 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.19 2010-11-29
+- Bugfix in bufrread.pl --filter
+- If local table version is 255, treat this as if it was 0 when
+  finding which table to use.
+
 1.18 2010-09-30
 - join_subsets altered to always respect order of subsets specified
-- encode_nil_message altered to set number of subsets and data
-  compression to 0, saving user from remembering this
+- encode_nil_message altered to set number of subsets to 1 and data
+  compression to 0, saving user from remembering this.
 
 1.17 2010-09-14
-- Data description operator 208Y implemented
+- Data description operator 208Y implemented.
 
 1.16 2010-07-21
 - Strip trailing nulls from CCITTIA5 data.
@@ -14,7 +19,7 @@ Revision history for Perl extension Geo::BUFR.
   whether bitmapped values are displayed side by side.
 - copy() renamed to copy_from().
 - Use looks_like_number from Scalar::Util to check that numeric input
-  to encoding routines is indeed numeric
+  to encoding routines is indeed numeric.
 
 1.15 2010-07-02
 - clone() replaced with copy() with somewhat different syntax.

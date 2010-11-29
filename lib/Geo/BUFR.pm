@@ -83,7 +83,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.18';
+our $VERSION = '1.19';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -721,6 +721,7 @@ sub get_table_version {
     if ($local_table_version == 0 || $local_table_version == 255) {
         $centre = 0;
         $subcentre = 0;
+        $local_table_version = 0;
     }
 
     # Use ECMWF table naming convention (used in version >= 000270 of libbufr)
@@ -3726,7 +3727,9 @@ sub _encode_compressed_value {
                 ? int( $first_value * $powers_of_ten[$scale] - $refval + 0.5 )
                     : undef;
             # Numeric data. First find minimum value
-            my $min_value = _minimum(\@values);
+            my ($min_value, $isub) = _minimum(\@values);
+            _croak "Encoded data value for $id and subset $isub is negative: $min_value"
+                if $min_value < 0;
             my @inc_values =
                 map { defined $_ ? $_ - $min_value : undef } @values;
             # Find how many bits are required to hold the increment
@@ -4117,24 +4120,29 @@ sub _check_equality {
 
 
 
-## Find minimum value among set of non negative numbers or undefined values
+## Find minimum value among set of numbers (undefined values
+## permitted, but at least one value must be defined). Also returns
+## for which number the minimum occurs (counting from 1).
 sub _minimum {
     my $v_ref = shift;
     my $min = 9999999999;
+    my $idx = 0;
+    my $i=0;
     foreach my $v (@{$v_ref}) {
+        $i++;
         next if not defined $v;
         if ($v < $min) {
             $min = $v;
+            $idx = $i;
         }
     }
-    _croak "Internal error: Minimum value negative: $min" if $min < 0;
-    return $min;
+    return ($min, $idx);
 }
 
 ## Find maximum value among set of non negative numbers or undefined values
 sub _maximum {
     my $v_ref = shift;
-    my $max = -1;
+    my $max = 0;
     foreach my $v (@{$v_ref}) {
         next if not defined $v;
         if ($v > $max) {
@@ -4630,7 +4638,10 @@ Set verbose level:
 
 Some info about what is going on in Geo::BUFR will be printed to
 STDOUT if $level > 0. With $level set to 1, all that is printed is the
-B, C and D tables used (with full path).
+B, C and D tables used (with full path). Setting verbose level > 1
+might be especially helpful when debugging, or for example if you want
+to extract as much information as possible from an incorrectly
+formatted BUFR message.
 
 No decoding of quality information:
 
