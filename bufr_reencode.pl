@@ -48,7 +48,10 @@ pod2usage(-verbose => 1) if $option{help};
 my $width = $option{width} ? $option{width} : 15;
 
 my $infile = shift;
-pod2usage(-verbose => 0) unless $infile and -f $infile;
+if (!$infile || !-f $infile) {
+    print STDERR "File '$infile' not found\n";
+    pod2usage(-verbose => 0);
+}
 
 # Default is croak if (recoverable) error found in encoded BUFR format
 my $strict_checking = defined $option{strict_checking}

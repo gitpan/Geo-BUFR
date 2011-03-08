@@ -1,5 +1,14 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.20 2011-03-08
+- Supporting delayed repetition (031011,031012)
+- Allow total length of BUFR message as stated in section 0 to be
+  bigger than actual length (if $Strict_checking not set).
+- Strict_checking for null characters in CCITTIA5 data.
+- New option --on_error_stop to bufrread.pl.
+- copy_from altered to copy also section 2 if copying of metadata is
+  requested. Makes bufralter.pl work for messages with optional section.
+
 1.19 2010-11-29
 - Bugfix in bufrread.pl --filter
 - If local table version is 255, treat this as if it was 0 when

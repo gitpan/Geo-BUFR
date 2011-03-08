@@ -361,7 +361,8 @@ sub set_bufr_edition {
 Will alter the BUFR messages in <bufr file> according to what is
 specified by the options provided. The modified file (text surrounding
 the BUFR messages will not be affected) will be printed to STDOUT
-(unless C<--outfile> is set).
+(unless C<--outfile> is set). None of the options (except --remove_sec2)
+will affect the content of optional sections if present.
 
 Execute without arguments for Usage, with option C<--help> for some
 additional info.

@@ -83,7 +83,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.19';
+our $VERSION = '1.20';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -93,6 +93,12 @@ bootstrap Geo::BUFR $VERSION;
 
 # Some package globals
 our $Verbose = 0;
+our $Spew = 0; # To avoid the overhead of subroutine calls to _spew
+               # (which is called a lot), $Spew is set to 1 if global
+               # $Verbose or at least one object VERBOSE is set > 1.
+               # This should speed up execution a bit in the common
+               # situation when no verbose mode (or only BUFR tables
+               # used) is requested
 our $Noqc = 0; # If set to true will prevent decoding (or encoding) of
                # any descriptors after 222000 is met
 our $Strict_checking = 0; # Ignore recoverable errors in BUFR format
@@ -163,7 +169,6 @@ sub new {
     $self->{VERBOSE} = 0;
     $self->{CURRENT_MESSAGE} = 0;
     $self->{CURRENT_SUBSET} = 0;
-    $self->{ALREADY_EXPANDED} = {};
     $self->{BUILD_BITMAP} = 0; # Will be set to 1 if a bit map needs to
                                # be built
     $self->{BITMAP_INDEX} = 0; # Used for building up bit maps; will
@@ -173,6 +178,12 @@ sub new {
     $self->{NUM_BITMAPS} = 0;  # Will be incremented each time an
                                # operator descriptor which uses a bit
                                # map is encountered in section 3
+    $self->{NUM_CHANGE_OPERATORS} = 0; # Will be incremented for
+                               # each of the operators CHANGE_WIDTH,
+                               # CHANGE_CCITTIA5_WIDTH, CHANGE_SCALE,
+                               # CHANGE_REFERENCE_VALUE (actually
+                               # NEW_REFVAL_OF) and
+                               # DIFFERENCE_STATISTICAL_VALUE in effect
 
     # If number of arguments is odd, first argument is expected to be
     # a string containing the BUFR message(s)
@@ -192,7 +203,8 @@ sub new {
 
 ## Copy content of the bufr object in first argument. With no extra
 ## arguments, will copy (clone) everything. With 'metadata' as second
-## argument, will copy just the metadata in section 0, 1 and 3
+## argument, will copy just the metadata in section 0, 1 and 3 (and
+## all of section 2 if present)
 sub copy_from {
     my $self = shift;
     my $bufr = shift;
@@ -207,6 +219,7 @@ sub copy_from {
             MASTER_TABLE_VERSION LOCAL_TABLE_VERSION YEAR MONTH DAY
             HOUR MINUTE SECOND LOCAL_USE DATA_SUBCATEGORY YEAR_OF_CENTURY
             NUM_SUBSETS OBSERVED_DATA COMPRESSED_DATA DESCRIPTORS_UNEXPANDED
+            SEC2_STREAM
             )) {
             if (exists $bufr->{$_}) {
                 $self->{$_} = $bufr->{$_};
@@ -216,7 +229,7 @@ sub copy_from {
             }
         }
     } elsif ($what eq 'all') {
-        $self = {};
+        %$self = ();
         while (my ($key, $value) = each %{$bufr}) {
             if ($key eq 'FILEHANDLE') {
                 # If a file has been associated with the copied
@@ -241,18 +254,21 @@ sub copy_from {
 }
 
 
-##  Set debug level
+##  Set debug level. Also set $Spew to true if debug level > 1 is set (we
+##  don't bother to reset $Spew to 0 if all debug levels return to 0 or 1)
 sub set_verbose {
     my $self = shift;
+    my $verbose = shift;
     if (ref($self)) {
         # Just myself
-        $self->{VERBOSE} = shift;
-        $self->_spew(2, "Verbosity level for object set to $self->{VERBOSE}");
+        $self->{VERBOSE} = $verbose;
+        $self->_spew(2, "Verbosity level for object set to $verbose");
     } else {
         # Whole class
-        $Verbose = shift;
-        Geo::BUFR->_spew(2, "Verbosity level for class set to $Verbose");
+        $Verbose = $verbose;
+        Geo::BUFR->_spew(2, "Verbosity level for class set to $verbose");
     }
+    $Spew = $verbose if $verbose > 1;
     return 1;
 }
 
@@ -834,7 +850,7 @@ sub _read_C_table {
 }
 
 ## Reads a D table file into a hash, e.g.
-##  $D_table{307080} = '301090 302031 ...'
+##  $D_table->{307080} = '301090 302031 ...'
 ## There are two different types of lines in D*.TXT, e.g.
 ##  307080 13 301090 BUFR template for synoptic reports
 ##            302031
@@ -879,7 +895,7 @@ sub load_BDtables {
     my $self = shift;
     my $table = shift || '';
 
-    my $version = $self->get_table_version($table)
+    my $version = $self->{TABLE_VERSION} = $self->get_table_version($table)
         or _croak "Not enough info to decide which tables to load";
 
     $self->{B_TABLE} = $BUFR_table{"B$version"} || _read_B_table($version);
@@ -1023,7 +1039,7 @@ sub _read_message {
     }
 
     # Report (if verbose setting) where we found the BUFR message
-    $self->_spew(2, "BUFR message at position %d", $pos);
+    $self->_spew(2, "BUFR message at position %d", $pos) if $Spew;
 
     # Read (rest) of Section 0 (length of BUFR message and edition number)
     my $sec0;                   # Section 0 is BUFR$sec0
@@ -1043,7 +1059,7 @@ sub _read_message {
 
     # Extract length and edition number
     my ($length, $edition) = unpack 'NC', "\0$sec0";
-    $self->_spew(2, "Message length: %d, Edition: %d", $length, $edition);
+    $self->_spew(2, "Message length: %d, Edition: %d", $length, $edition) if $Spew;
 
     # Read rest of BUFR message (section 1-5)
     my $msg;
@@ -1063,14 +1079,14 @@ sub _read_message {
         $msg = substr $in_buffer, $pos + 8, $length - 8;
         $pos += $length;
     }
-    $self->_spew(2, "Successfully read BUFR message; position now %d", $pos);
+    $self->_spew(2, "Successfully read BUFR message; position now %d", $pos) if $Spew;
 
     # Reset $self->{POS} to end of BUFR message
     $self->{POS} = $pos;
 
     # Is this last BUFR message?
     if (not $self->_find_next_BUFR($filehandle, $in_buffer, $pos)) {
-        $self->_spew(2, "Last BUFR message (reached end of file)");
+        $self->_spew(2, "Last BUFR message (reached end of file)") if $Spew;
         $self->{LAST_MESSAGE} = 1;
     }
 
@@ -1123,7 +1139,7 @@ sub _decode_sections {
 
     ##  Decode Section 1 (Identification Section)  ##
 
-    $self->_spew(2, "Decoding section 1");
+    $self->_spew(2, "Decoding section 1") if $Spew;
 
     # Extract Section 1 information
     if ($self->{BUFR_EDITION} < 4) {
@@ -1190,13 +1206,13 @@ sub _decode_sections {
         $self->{LOCAL_USE}            = $sec1[17] if $sec1[0] > 22;
     }
     $self->_spew(3, "BUFR edition: %d Optional section: %d Update sequence number: %d",
-                $self->{BUFR_EDITION}, $self->{OPTIONAL_SECTION}, $self->{UPDATE_NUMBER});
+                $self->{BUFR_EDITION}, $self->{OPTIONAL_SECTION}, $self->{UPDATE_NUMBER}) if $Spew;
 
     $self->_validate_datetime() if ($Strict_checking);
 
     ##  Decode Section 2 (Optional Section) if present  ##
 
-    $self->_spew(2, "Decoding section 2");
+    $self->_spew(2, "Decoding section 2") if $Spew;
 
     if ($self->{OPTIONAL_SECTION}) {
         my @sec2 = unpack 'N', "\0" . $self->{BUFR_STREAM};
@@ -1219,7 +1235,7 @@ sub _decode_sections {
 
     ##  Decode Section 3 (Data Description Section)  ##
 
-    $self->_spew(2, "Decoding section 3");
+    $self->_spew(2, "Decoding section 3") if $Spew;
 
     my @sec3 = unpack 'NCnC', "\0".$self->{BUFR_STREAM};
 
@@ -1241,11 +1257,11 @@ sub _decode_sections {
     $self->{OBSERVED_DATA}    = vec($sec3[3] & 0x80,0,1); # extract 1. bit
     $self->{COMPRESSED_DATA}  = vec($sec3[3] & 0x40,1,1); # extract 2. bit
     $self->_spew(3, "Number of subsets: %d Observed data: %d Compressed data: %d",
-                 $self->{NUM_SUBSETS}, $self->{OBSERVED_DATA}, $self->{COMPRESSED_DATA});
+                 $self->{NUM_SUBSETS}, $self->{OBSERVED_DATA}, $self->{COMPRESSED_DATA}) if $Spew;
 
     ##  Decode Section 4 (Data Section)  ##
 
-    $self->_spew(2, "Decoding section 4");
+    $self->_spew(2, "Decoding section 4") if $Spew;
 
     my $sec4_len = unpack 'N', "\0$self->{BUFR_STREAM}";
 
@@ -1262,11 +1278,24 @@ sub _decode_sections {
 
     ##  Decode Section 5 (End Section)  ##
 
-    $self->_spew(2, "Decoding section 5");
+    $self->_spew(2, "Decoding section 5") if $Spew;
 
-    _croak "Section 5 is not '7777' but: 0x"
-        . (map {sprintf "%02X", $_} unpack('C*', $self->{BUFR_STREAM}))
-            unless $self->{BUFR_STREAM} eq '7777';
+    # Next 4 characters should be '7777' and these should be end of
+    # message, but allow more characters (i.e. length of message in
+    # section 0 has been set too big) if $Strict_checking not set
+    my $str = $self->{BUFR_STREAM};
+    my $len = length($str);
+    if ($len > 4
+        || ($len == 4 && substr($str,0,4) ne '7777')) {
+        my $err_msg = "Section 5 is not '7777' but the $len"
+            . " characters (in hex): "
+                . join(' ', map {sprintf "0x%02X", $_} unpack('C*', $str));
+        if ($len > 4 && substr($str,0,4) eq '7777') {
+            _complain($err_msg);
+        } elsif ($len == 4 && substr($str,0,4) ne '7777') {
+            _croak($err_msg);
+        }
+    }
 
     return $self;
 }
@@ -1279,7 +1308,7 @@ sub _decode_sections {
 sub _next_message {
     my $self = shift;
 
-    $self->_spew(2, "Reading next BUFR message");
+    $self->_spew(2, "Reading next BUFR message") if $Spew;
 
     $self->{ERROR_IN_MESSAGE} = 0;
 
@@ -1305,26 +1334,24 @@ sub _next_message {
         $self->{ERROR_IN_MESSAGE} = 1;
         die $@, "\n";
     }
-    $self->_spew(2, "BUFR table version is $table_version");
+    $self->_spew(2, "BUFR table version is $table_version") if $Spew;
 
     # Get the data descriptors and expand them
     my @unexpanded = _int2fxy(unpack 'n*', $self->{SEC3}[4]);
     $self->{DESCRIPTORS_UNEXPANDED} = join ' ', @unexpanded;
-    $self->_spew(3, "Unexpanded data descriptors: %s", $self->{DESCRIPTORS_UNEXPANDED});
+    $self->_spew(3, "Unexpanded data descriptors: %s", $self->{DESCRIPTORS_UNEXPANDED}) if $Spew;
 
-    $self->_spew(2, "Expanding data descriptors");
+    $self->_spew(2, "Expanding data descriptors") if $Spew;
     my $alias = "$table_version " . $self->{DESCRIPTORS_UNEXPANDED};
     if (exists $Descriptors_already_expanded{$alias}) {
-        $self->{DESCRIPTORS_EXPANDED}
-            = $Descriptors_already_expanded{$alias};
+        $self->{DESCRIPTORS_EXPANDED} = $Descriptors_already_expanded{$alias};
     } else {
-        $Descriptors_already_expanded{$alias}
-            = $self->{DESCRIPTORS_EXPANDED}
-                = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+        $Descriptors_already_expanded{$alias} = $self->{DESCRIPTORS_EXPANDED}
+            = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
     }
 
     # Unpack data from bitstream
-    $self->_spew(2, "Unpacking data");
+    $self->_spew(2, "Unpacking data") if $Spew;
     eval {
         if ($self->{COMPRESSED_DATA}) {
             $self->_decompress_bitstream();
@@ -1345,7 +1372,7 @@ sub _next_message {
 sub next_observation {
     my $self = shift;
 
-    $self->_spew(2, "Fetching next observation");
+    $self->_spew(2, "Fetching next observation") if $Spew;
     # Read next BUFR message, if necessary
     if ($self->{ERROR_IN_MESSAGE} && $self->{LAST_MESSAGE}) {
         $self->{EOF} = 1;
@@ -1362,10 +1389,11 @@ sub next_observation {
         $self->{NUM_BITMAPS} = 0;
         # Some more tidying after decoding of previous message might
         # be necessary
+        $self->{NUM_CHANGE_OPERATORS} = 0;
         undef $self->{CHANGE_WIDTH};
         undef $self->{CHANGE_CCITTIA5_WIDTH};
         undef $self->{CHANGE_SCALE};
-        undef $self->{CHANGE_REFERENCE};
+        undef $self->{CHANGE_REFERENCE_VALUE};
         undef $self->{NEW_REFVAL_OF};
         undef $self->{ADD_ASSOCIATED_FIELD};
 
@@ -1840,10 +1868,10 @@ sub _expand_descriptors {
     for (my $di = 0; $di < @_; $di++) {
         my $descriptor = $_[$di];
         _croak "$descriptor is not a BUFR descriptor"
-            if $descriptor !~ /\d{6}$/;
+            if $descriptor !~ /^\d{6}$/;
         my $f = int substr($descriptor, 0, 1);
         if ($f == 1) {
-            # Simple Replication
+            # Simple replication
             my $x = substr $descriptor, 1, 2; # Replicate next $x descriptors
             my $y = substr $descriptor, 3;    # Number of replications
             if ($y > 0) {
@@ -1857,9 +1885,9 @@ sub _expand_descriptors {
                 push @expanded, _expand_descriptors($D_table, @r) if @r;
             } else {
                 # Delayed replication. Next descriptor ought to be the
-                # delayed descriptor replication factor, i.e. one of
-                # 0310(00|01|02|11|12), followed by the x descriptors
-                # to be replicated
+                # delayed descriptor replication (and data repetition)
+                # factor, i.e. one of 0310(00|01|02|11|12), followed
+                # by the x descriptors to be replicated
                 _croak "Not enough descriptors following delayed replication"
                     . " descriptor $descriptor" if $di + $x + 1 > @_;
                 _croak "Delayed replication descriptor $descriptor is "
@@ -2097,6 +2125,14 @@ sub _decode_bitstream {
     my @subset_data; # Will contain data values for subset 1,2...
     my @subset_desc; # Will contain the set of descriptors for subset 1,2...
                      # expanded to be in one to one correspondance with the data
+    my $repeat_X; # Set to number of descriptors to be repeated if
+                  # delayed descriptor and data repetition factor is
+                  # in effect
+    my $repeat_factor; # Set to number of times descriptors (and data)
+                       # are to be repeated if delayed descriptor and
+                       # data repetition factor is in effect
+    my @repeat_desc; # The descriptors to be repeated
+    my @repeat_data; # The data to be repeated
     my $B_table = $self->{B_TABLE};
 
     # Has to fully expand @desc for each subset in turn, as delayed
@@ -2109,14 +2145,16 @@ sub _decode_bitstream {
     # $subset_data[$isub] (the operators included having data value
     # '')
   S_LOOP: foreach my $isub (1..$self->{NUM_SUBSETS}) {
-        $self->_spew(2, "Decoding subset number %d", $isub);
+        $self->_spew(2, "Decoding subset number %d", $isub) if $Spew;
         my @desc = split /\s/, $self->{DESCRIPTORS_EXPANDED};
 
         # Note: @desc as well as $idesc may be changed during this loop,
         # so we cannot use a foreach loop instead
       D_LOOP: for (my $idesc = 0; $idesc < @desc; $idesc++) {
             my $id = $desc[$idesc];
-            my ($f, $x, $y) = unpack 'AA2A3', $id;
+            my $f = substr($id,0,1);
+            my $x = substr($id,1,2);
+            my $y = substr($id,3,3);
 
             if ($f == 1) {
                 # Delayed replication
@@ -2130,10 +2168,11 @@ sub _decode_bitstream {
 
                 $_ = $desc[$idesc+1];
                 _croak "$id Erroneous replication factor"
-                    unless /0310(00|01|02|11|12)/ && exists $B_table->{$_};
+                    unless /^0310(00|01|02|11|12)/ && exists $B_table->{$_};
 
                 my $width = (split /\0/, $B_table->{$_})[-1];
                 my $factor = bitstream2dec($bitstream, $pos, $width);
+                $pos += $width;
                 # Delayed descriptor replication factors (and
                 # associated fields) are the only values in section 4
                 # where all bits being 1 is not to be interpreted as a
@@ -2141,22 +2180,40 @@ sub _decode_bitstream {
                 if (not defined $factor) {
                     $factor = 2**$width - 1;
                 }
-                $self->_spew(4, "$_  Delayed replication factor: $factor");
+                if ($Spew) {
+                    if ($_ eq '031011' || $_ eq '031012') {
+                        $self->_spew(4, "$_  Delayed repetition factor: $factor");
+                    } else {
+                        $self->_spew(4, "$_  Delayed replication factor: $factor");
+                    }
+                }
                 # Include the delayed replication in descriptor and data list
                 splice @desc, $idesc++, 0, $_;
                 push @{$subset_desc[$isub]}, $_;
                 push @{$subset_data[$isub]}, $factor;
 
-                $pos += $width;
+                if ($_ eq '031011' || $_ eq '031012') {
+                    # For delayed repetition, descriptor *and* data are
+                    # to be repeated
+                    $repeat_X = $x;
+                    $repeat_factor = $factor;
+                }
                 my @r = ();
                 push @r, @desc[($idesc+2)..($idesc+$x+1)] while $factor--;
-                $self->_spew(4, "Delayed replication ($id $_ -> @r)");
                 splice @desc, $idesc, 2+$x, @r;
 
+                if ($repeat_factor) {
+                    # Skip to the last set to be repeated, which will
+                    # then be included $repeat_factor times
+                    $idesc += $x * ($repeat_factor - 1);
+                    $self->_spew(4, "Delayed repetition ($id $_ -> @r)") if $Spew;
+                } else {
+                    $self->_spew(4, "Delayed replication ($id $_ -> @r)") if $Spew;
+                }
                 if ($idesc < @desc) {
                     redo D_LOOP;
                 } else {
-                    last D_LOOP;
+                    last D_LOOP; # Might happen if delayed factor is 0
                 }
 
             } elsif ($f == 2) {
@@ -2225,7 +2282,7 @@ sub _decode_bitstream {
                     ? -($new_refval & ((1<<$num_bits-1)-1))
                         : $new_refval;
                 $self->_spew(4, "$id * Change reference value: ".
-                             ($new_refval > 0 ? "+" : "")."$new_refval");
+                             ($new_refval > 0 ? "+" : "")."$new_refval") if $Spew;
                 $self->{NEW_REFVAL_OF}{$id}{$isub} = $new_refval;
                 # Identify new reference values by setting f=9
                 push @{$subset_desc[$isub]}, $id + 900000;
@@ -2244,7 +2301,7 @@ sub _decode_bitstream {
                 $pos += $width;
                 push @{$subset_desc[$isub]}, 999999;
                 push @{$subset_data[$isub]}, $value;
-                $self->_spew(4, "Added associated field: %s", $value);
+                $self->_spew(4, "Added associated field: %s", $value) if $Spew;
             }
 
             # We now have a "real" data descriptor
@@ -2255,7 +2312,7 @@ sub _decode_bitstream {
             # the quality information applies, as well as the new
             # index ($idesc) in the descriptor array for the bit
             # mapped values
-            if ($id =~ /^033/
+            if (substr($id,0,3) eq '033'
                 and defined $self->{BITMAP_OPERATORS}
                 and $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
                 my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
@@ -2269,22 +2326,25 @@ sub _decode_bitstream {
             _croak "Data descriptor $id is not present in BUFR table B"
                 unless exists $B_table->{$id};
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
-            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
+            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name) if $Spew;
 
             # Override Table B values if Data Description Operators are in effect
-            $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-            $width = $self->{CHANGE_CCITTIA5_WIDTH}
-                if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
-            $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
-            # To prevent autovivification (see perlodc -f exists) we
-            # need this laborious test for defined
-            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
-                && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
-            # Difference statistical values use different width and reference value
-            if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
-                $width += 1;
-                $refval = -2**$width;
-                undef $self->{DIFFERENCE_STATISTICAL_VALUE};
+            if ($self->{NUM_CHANGE_OPERATORS} > 0) {
+                $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+                $width = $self->{CHANGE_CCITTIA5_WIDTH}
+                    if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+                $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                # To prevent autovivification (see perlodc -f exists) we
+                # need this laborious test for defined
+                $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
+                    && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
+                # Difference statistical values use different width and reference value
+                if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
+                    $width += 1;
+                    $refval = -2**$width;
+                    undef $self->{DIFFERENCE_STATISTICAL_VALUE};
+                    $self->{NUM_CHANGE_OPERATORS}--;
+                }
             }
             _croak "$id Data width <= 0" if $width <= 0;
             my $scale_factor = $powers_of_ten[-$scale]; #10**(-$scale);
@@ -2295,17 +2355,34 @@ sub _decode_bitstream {
                 _croak "Width for unit CCITTIA5 must be integer bytes\n"
                     . "is $width bits for descriptor $id" if $width % 8;
                 $value = bitstream2ascii($bitstream, $pos, $width/8);
-                $self->_spew(3, "  %s", defined $value ? $value : 'missing');
-                # Trim string, also for trailing nulls
-                $value = _trim($value);
+                $self->_spew(3, "  %s", defined $value ? $value : 'missing') if $Spew;
+                # Trim string, also removing nulls
+                $value = _trim($value, $id);
             } else {
                 $value = bitstream2dec($bitstream, $pos, $width);
                 $value = ($value + $refval) * $scale_factor if defined $value;
-                $self->_spew(3, "  %s", defined $value ? $value : 'missing');
+                $self->_spew(3, "  %s", defined $value ? $value : 'missing') if $Spew;
             }
             $pos += $width;
             push @{$subset_data[$isub]}, $value;
             # $value = undef if missing value
+
+            if ($repeat_X) {
+                # Delayed repetition factor (030011/030012) is in
+                # effect, so descriptors and data are to be repeated
+                push @repeat_desc, $id;
+                push @repeat_data, $value;
+                if (--$repeat_X == 0) {
+                    # Store $repeat_factor repetitions of data and descriptors
+                    # (one repetition has already been included)
+                    while (--$repeat_factor) {
+                        push @{$subset_desc[$isub]}, @repeat_desc;
+                        push @{$subset_data[$isub]}, @repeat_data;
+                    }
+                    @repeat_desc = ();
+                    @repeat_data = ();
+                }
+            }
 
             if ($id eq '031031' and $self->{BUILD_BITMAP}) {
                 # Store the index of expanded descriptors if data is
@@ -2354,9 +2431,20 @@ sub _decompress_bitstream {
                          # subset, expanded to be in one to one
                          # correspondance with the data, i.e. element
                          # descriptors only
+    my $repeat_X; # Set to number of descriptors to be repeated if
+                  # delayed descriptor and data repetition factor is
+                  # in effect. Will be decremented while (repeated)
+                  # data sets are extracted
+    my $repeat_XX; # Like $repeat_X, but will not be decremented
+    my $repeat_factor; # Set to number of times descriptors (and data)
+                       # are to be repeated if delayed descriptor and
+                       # data repetition factor is in effect
+    my @repeat_desc; # The descriptors to be repeated
+    my @repeat_data; # The data to be repeated (reference to an array
+                     # containing the data values for subset $i)
 
     _complain("Compression set in section 1 for one subset message")
-        if $Strict_checking && $nsubsets == 1;
+        if $nsubsets == 1;
 
     $#subset_data = $nsubsets;
 
@@ -2370,7 +2458,9 @@ sub _decompress_bitstream {
     # to run through the set of descriptors once.
   D_LOOP: for (my $idesc = 0; $idesc < @desc; $idesc++) {
         my $id = $desc[$idesc];
-        my ($f, $x, $y) = unpack 'AA2A3', $id;
+        my $f = substr($id,0,1);
+        my $x = substr($id,1,2);
+        my $y = substr($id,3,3);
 
         if ($f == 1) {
             # Delayed replication
@@ -2384,32 +2474,50 @@ sub _decompress_bitstream {
 
             $_ = $desc[$idesc+1];
             _croak "$id Erroneous replication factor"
-                unless /0310(00|01|02|11|12)/ && exists $B_table->{$_};
+                unless /^0310(00|01|02|11|12)/ && exists $B_table->{$_};
 
             my $width = (split /\0/, $B_table->{$_})[-1];
             my $factor = bitstream2dec($bitstream, $pos, $width);
+            $pos += $width + 6; # 6 bits for the bit count (which we
+                                # skip because we know it has to be 0
+                                # for delayed replication)
             # Delayed descriptor replication factors (and associated
             # fields) are the only values in section 4 where all bits
             # being 1 is not interpreted as a missing value
             if (not defined $factor) {
                 $factor = 2**$width - 1;
             }
-            $self->_spew(4, "$_  Delayed replication factor: $factor");
             # Include the delayed replication in descriptor and data list
             push @desc_exp, $_;
             foreach my $isub (1..$nsubsets) {
                 push @{$subset_data[$isub]}, $factor;
             }
 
-            $pos += $width + 6; # 6 bits for the bit count (which we
-                                # skip because we know it has to be 0
-                                # for delayed replication)
+            if ($_ eq '031011' || $_ eq '031012') {
+                # For delayed repetition, descriptor *and* data is
+                # to be repeated
+                $repeat_X = $repeat_XX = $x;
+                $repeat_factor = $factor;
+                $self->_spew(4, "$_  Delayed repetition factor: $factor") if $Spew;
+            } else {
+                $self->_spew(4, "$_  Delayed replication factor: $factor") if $Spew;
+            }
             my @r = ();
             push @r, @desc[($idesc+2)..($idesc+$x+1)] while $factor--;
-            $self->_spew(4, "$_  Delayed replication ($id $_ -> @r)");
             splice @desc, $idesc, 2+$x, @r;
+            if ($Spew) {
+                if ($repeat_factor) {
+                    $self->_spew(4, "$_  Delayed repetition ($id $_ -> @r)");
+                } else {
+                    $self->_spew(4, "$_  Delayed replication ($id $_ -> @r)");
+                }
+            }
 
-            redo D_LOOP;
+            if ($idesc < @desc) {
+                redo D_LOOP;
+            } else {
+                last D_LOOP; # Might happen if delayed factor is 0
+            }
 
         } elsif ($f == 2) {
             my $flow;
@@ -2481,7 +2589,7 @@ sub _decompress_bitstream {
                 ? -($new_refval & ((1<<$num_bits-1)-1))
                     : $new_refval;
             $self->_spew(4, "$id * Change reference value: ".
-                         ($new_refval > 0 ? "+" : "")."$new_refval");
+                         ($new_refval > 0 ? "+" : "")."$new_refval") if $Spew;
             $self->{NEW_REFVAL_OF}{$id} = $new_refval;
             # Identify new reference values by setting f=9
             push @desc_exp, $id + 900000;
@@ -2507,6 +2615,28 @@ sub _decompress_bitstream {
 
         $pos = $self->_extract_compressed_value($id, $idesc, $pos, $bitstream,
                                                 $nsubsets, \@subset_data);
+        if ($repeat_X) {
+            # Delayed repetition factor (030011/030012) is in
+            # effect, so descriptors and data are to be repeated
+            push @repeat_desc, $id;
+            foreach my $isub (1..$nsubsets) {
+                push @{$repeat_data[$isub]}, $subset_data[$isub]->[-1];
+            }
+            if (--$repeat_X == 0) {
+                # Store $repeat_factor repetitions of data and descriptors
+                # (one repetition has already been included)
+                while (--$repeat_factor) {
+                    push @desc_exp, @repeat_desc;
+                    foreach my $isub (1..$nsubsets) {
+                        push @{$subset_data[$isub]}, @{$repeat_data[$isub]};
+                    }
+                    $idesc += $repeat_XX;
+                }
+                @repeat_desc = ();
+                @repeat_data = ();
+                $repeat_XX = 0;
+            }
+        }
     }
 
     # Check that length of section 4 corresponds to what expected from section 3
@@ -2532,9 +2662,9 @@ sub _extract_compressed_value {
     # the quality information applies, as well as the new
     # index ($idesc) in the descriptor array for the bit
     # mapped values
-    if ($id =~ /^033/
-        and defined $self->{BITMAP_OPERATORS}
-        and $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
+    if (substr($id,0,3) eq '033'
+        && defined $self->{BITMAP_OPERATORS}
+        && $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
         my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
         _croak "$id: Not enough quality values provided"
             if not defined $data_idesc;
@@ -2562,19 +2692,22 @@ sub _extract_compressed_value {
         ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
 
         # Override Table B values if Data Description Operators are in effect
-        $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-        $width = $self->{CHANGE_CCITTIA5_WIDTH}
-            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
-        $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
-        $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
-        # Difference statistical values use different width and reference value
-        if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
-            $width += 1;
-            $refval = -2**$width;
-            undef $self->{DIFFERENCE_STATISTICAL_VALUE};
+        if ($self->{NUM_CHANGE_OPERATORS} > 0) {
+            $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+            $width = $self->{CHANGE_CCITTIA5_WIDTH}
+                if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+            $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+            $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
+            # Difference statistical values use different width and reference value
+            if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
+                $width += 1;
+                $refval = -2**$width;
+                undef $self->{DIFFERENCE_STATISTICAL_VALUE};
+                $self->{NUM_CHANGE_OPERATORS}--;
+            }
         }
     }
-    $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name);
+    $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name) if $Spew;
     _croak "$id Data width <= 0" if $width <= 0;
     my $scale_factor = $powers_of_ten[-$scale]; #10**(-$scale);
 
@@ -2583,7 +2716,7 @@ sub _extract_compressed_value {
         _croak "Width for unit CCITTIA5 must be integer bytes\n"
             . "is $width bits for descriptor $id" if $width % 8;
         my $minval = bitstream2ascii($bitstream, $pos, $width/8);
-        if ($self->{VERBOSE} >= 5) {
+        if ($Spew) {
             if ($minval eq "\0" x ($width/8)) {
                 $self->_spew(5, " Local reference value has all bits zero");
             } else {
@@ -2593,7 +2726,7 @@ sub _extract_compressed_value {
         $pos += $width;
         # Extract number of bytes for next subsets
         my $deltabytes = bitstream2dec($bitstream, $pos, 6);
-        $self->_spew(5, " Increment width (bytes): %d", $deltabytes);
+        $self->_spew(5, " Increment width (bytes): %d", $deltabytes) if $Spew;
         $pos += 6;
         if ($deltabytes && defined $minval) {
             # Extract compressed data for all subsets. According
@@ -2605,15 +2738,15 @@ sub _extract_compressed_value {
             my $incr_values;
             foreach my $isub (1..$nsubsets) {
                 my $string = bitstream2ascii($bitstream, $pos, $deltabytes);
-                if ($self->{VERBOSE} >= 5) {
+                if ($Spew) {
                     $incr_values .= defined $string ? "$string," : ',';
                 }
-                # Trim string, also for trailing nulls
-                $string = _trim($string);
+                # Trim string, also removing nulls
+                $string = _trim($string, $id);
                 push @{$subset_data_ref->[$isub]}, $string;
                 $pos += 8*$deltabytes;
             }
-            if ($self->{VERBOSE} >= 5) {
+            if ($Spew) {
                 chop $incr_values;
                 $self->_spew(5, " Increment values: $incr_values");
             }
@@ -2621,8 +2754,8 @@ sub _extract_compressed_value {
             # If min value is defined => All subsets set to min value
             # If min value is undefined => Data in all subsets are undefined
             my $value = (defined $minval) ? $minval : undef;
-            # Trim string, also for trailing nulls
-            $value = _trim($value);
+            # Trim string, also removing nulls
+            $value = _trim($value, $id);
             foreach my $isub (1..$nsubsets) {
                 push @{$subset_data_ref->[$isub]}, $value;
             }
@@ -2630,28 +2763,25 @@ sub _extract_compressed_value {
         }
         $self->_spew(3, "  %s", join ',',
                      map { defined($subset_data_ref->[$_][-1]) ?
-                     $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets )
-                     if $self->{VERBOSE} >= 3;
+                               $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets) if $Spew;
     } else {
         # Extract minimum value
         my $minval = bitstream2dec($bitstream, $pos, $width);
         $minval += $refval if defined $minval;
         $pos += $width;
-        $self->_spew(5, " Local reference value: %d", $minval) if defined $minval;
+        $self->_spew(5, " Local reference value: %d", $minval) if $Spew && defined $minval;
 
         # Extract number of bits for next subsets
         my $deltabits = bitstream2dec($bitstream, $pos, 6);
         $pos += 6;
-        $self->_spew(5, " Increment width (bits): %d", $deltabits);
+        $self->_spew(5, " Increment width (bits): %d", $deltabits) if $Spew;
 
         if ($deltabits && defined $minval) {
             # Extract compressed data for all subsets
             my $incr_values;
             foreach my $isub (1..$nsubsets) {
                 my $value = bitstream2dec($bitstream, $pos, $deltabits);
-                if ($self->{VERBOSE} >= 5) {
-                    $incr_values .= defined $value ? "$value," : ',';
-                }
+                $incr_values .= defined $value ? "$value," : ',' if $Spew;
                 $value = ($value + $minval) * $scale_factor if defined $value;
                 # All bits set to 1 for associated field is NOT
                 # interpreted as missing value
@@ -2661,7 +2791,7 @@ sub _extract_compressed_value {
                 push @{$subset_data_ref->[$isub]}, $value;
                 $pos += $deltabits;
             }
-            if ($self->{VERBOSE} >= 5) {
+            if ($Spew) {
                 chop $incr_values;
                 $self->_spew(5, " Increment values: %s", $incr_values);
             }
@@ -2702,8 +2832,7 @@ sub _extract_compressed_value {
         }
         $self->_spew(3, "  %s", join ' ',
                      map { defined($subset_data_ref->[$_][-1]) ?
-                     $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets )
-                     if $self->{VERBOSE} >= 3;
+                     $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets) if $Spew;
     }
     return $pos;
 }
@@ -2727,10 +2856,11 @@ sub reencode_message {
   MESSAGE: while ($i < @lines) {
         # Some tidying after decoding of previous message might be
         # necessary
+        $self->{NUM_CHANGE_OPERATORS} = 0;
         undef $self->{CHANGE_WIDTH};
         undef $self->{CHANGE_CCITTIA5_WIDTH};
         undef $self->{CHANGE_SCALE};
-        undef $self->{CHANGE_REFERENCE};
+        undef $self->{CHANGE_REFERENCE_VALUE};
         undef $self->{NEW_REFVAL_OF};
         undef $self->{ADD_ASSOCIATED_FIELD};
         undef $self->{BITMAPS};
@@ -2884,15 +3014,15 @@ sub encode_message {
     _croak "encode_message: No data/descriptors provided" unless $desc_refs;
 
     $self->{MESSAGE_NUMBER}++;
-    $self->_spew(2, "Encoding message number %d", $self->{MESSAGE_NUMBER});
+    $self->_spew(2, "Encoding message number %d", $self->{MESSAGE_NUMBER}) if $Spew;
 
     $self->load_BDtables();
 
-    $self->_spew(2, "Encoding section 1-3");
+    $self->_spew(2, "Encoding section 1-3") if $Spew;
     my $sec1_stream = $self->_encode_sec1();
     my $sec2_stream = $self->_encode_sec2();
     my $sec3_stream = $self->_encode_sec3();
-    $self->_spew(2, "Encoding section 4");
+    $self->_spew(2, "Encoding section 4") if $Spew;
     my $sec4_stream = $self->_encode_sec4($data_refs, $desc_refs);
 
     # Compute length of whole message and encode section 0
@@ -3026,7 +3156,9 @@ sub _encode_sec3 {
     my $desc_binary = "\0\0" x @desc;
     my $pos = 0;
     foreach my $desc (@desc) {
-        my ($f, $x, $y) = unpack 'AA2A3', $desc;
+        my $f = substr($desc,0,1);
+        my $x = substr($desc,1,2);
+        my $y = substr($desc,3,3);
         dec2bitstream($f, $desc_binary, $pos, 2);
         $pos += 2;
         dec2bitstream($x, $desc_binary, $pos, 6);
@@ -3100,7 +3232,7 @@ sub encode_nil_message {
 
     $self->load_BDtables();
 
-    $self->_spew(2, "Encoding NIL message");
+    $self->_spew(2, "Encoding NIL message") if $Spew;
     my $sec1_stream = $self->_encode_sec1();
     my $sec3_stream = $self->_encode_sec3();
     my $sec4_stream = $self->_encode_nil_sec4($stationid_ref,
@@ -3137,8 +3269,13 @@ sub _encode_nil_sec4 {
         my @unexpanded = split / /, $self->{DESCRIPTORS_UNEXPANDED};
         _croak "_encode_nil_sec4: D_TABLE not given"
             unless $self->{D_TABLE};
-        $self->{DESCRIPTORS_EXPANDED} =
-            join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+        my $alias = "$self->{TABLE_VERSION} " . $self->{DESCRIPTORS_UNEXPANDED};
+        if (exists $Descriptors_already_expanded{$alias}) {
+            $self->{DESCRIPTORS_EXPANDED} = $Descriptors_already_expanded{$alias};
+        } else {
+            $Descriptors_already_expanded{$alias} = $self->{DESCRIPTORS_EXPANDED}
+                = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+        }
     }
 
     # The rest is very similar to sub _decode_bitstream, except that we
@@ -3154,7 +3291,9 @@ sub _encode_nil_sec4 {
   D_LOOP: for (my $idesc = 0; $idesc < @desc; $idesc++) {
 
         my $id = $desc[$idesc];
-        my ($f, $x, $y) = unpack 'AA2A3', $id;
+        my $f = substr($id,0,1);
+        my $x = substr($id,1,2);
+        my $y = substr($id,3,3);
 
         if ($f == 1) {
             # Delayed replication
@@ -3168,17 +3307,19 @@ sub _encode_nil_sec4 {
 
             $_ = $desc[$idesc+1];
             _croak "$id Erroneous replication factor"
-                unless /0310(00|01|02|11|12)/ && exists $B_table->{$_};
+                unless /^0310(00|01|02|11|12)/ && exists $B_table->{$_};
             my $factor = 1;
-            if (@delayed_repl && /031001|2/) {
+            if (@delayed_repl && /^03100(1|2)/) {
                 $factor = shift @delayed_repl;
                 croak "Delayed replication factor must be positive integer in "
                     . "encode_nil_message, is '$factor'"
-                        if $factor !~ /^\d+$/ && $factor < 1;
+                        if ($factor !~ /^\d+$/ || $factor == 0);
             }
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$_};
-            $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name);
-            $self->_spew(3, "  %s", $factor);
+            if ($Spew) {
+                $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name);
+                $self->_spew(3, "  %s", $factor);
+            }
             dec2bitstream($factor, $bitstream, $pos, $width);
             $pos += $width;
             # Include the delayed replication in descriptor list
@@ -3186,13 +3327,13 @@ sub _encode_nil_sec4 {
 
             my @r = ();
             push @r, @desc[($idesc+2)..($idesc+$x+1)] while $factor--;
-            $self->_spew(4, "Delayed replication ($id $_ -> @r)");
+            $self->_spew(4, "Delayed replication ($id $_ -> @r)") if $Spew;
             splice @desc, $idesc, 2+$x, @r;
 
             if ($idesc < @desc) {
                 redo D_LOOP;
             } else {
-                last D_LOOP;
+                last D_LOOP; # Might happen if delayed factor is 0
             }
 
         } elsif ($f == 2) {
@@ -3211,20 +3352,22 @@ sub _encode_nil_sec4 {
         _croak "Data descriptor $id is not present in BUFR table B"
             unless exists $B_table->{$id};
         my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
-        $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name);
+        $self->_spew(3, "%6s  %-20s   %s", $id, $unit, $name) if $Spew;
 
         # Override Table B values if Data Description Operators are in effect
-        $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-        $width = $self->{CHANGE_CCITTIA5_WIDTH}
-            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+        if ($self->{NUM_CHANGE_OPERATORS} > 0) {
+            $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+            $width = $self->{CHANGE_CCITTIA5_WIDTH}
+                if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+            $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+            $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
+        }
         _croak "$id Data width <= 0" if $width <= 0;
-        $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
         my $scale_factor = $powers_of_ten[-$scale]; #10**(-$scale);
-        $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
 
         if ($stationid_ref->{$id}) {
             my $value = $stationid_ref->{$id};
-            $self->_spew(3, "  %s", $value);
+            $self->_spew(3, "  %s", $value) if $Spew;
             if ($unit eq 'CCITTIA5') {
                 # Encode ASCII string in $width bits (left justified,
                 # padded with spaces)
@@ -3271,8 +3414,13 @@ sub _encode_bitstream {
 
     # Expand section 3 except for delayed replication and operator descriptors
     my @unexpanded = split / /, $self->{DESCRIPTORS_UNEXPANDED};
-    $self->{DESCRIPTORS_EXPANDED}
-        = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+    my $alias = "$self->{TABLE_VERSION} " . $self->{DESCRIPTORS_UNEXPANDED};
+    if (exists $Descriptors_already_expanded{$alias}) {
+        $self->{DESCRIPTORS_EXPANDED} = $Descriptors_already_expanded{$alias};
+    } else {
+        $Descriptors_already_expanded{$alias} = $self->{DESCRIPTORS_EXPANDED}
+            = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+    }
 
     my $nsubsets = $self->{NUM_SUBSETS};
     my $B_table = $self->{B_TABLE};
@@ -3282,7 +3430,7 @@ sub _encode_bitstream {
     my @operators;
 
   S_LOOP: foreach my $isub (1..$nsubsets) {
-        $self->_spew(2, "Encoding subset number %d", $isub);
+        $self->_spew(2, "Encoding subset number %d", $isub) if $Spew;
         # The data values to use for this subset
         my $data_ref = $data_refs->[$isub];
         # The descriptors from expanding section 3
@@ -3294,7 +3442,9 @@ sub _encode_bitstream {
         # so we cannot use a foreach loop instead
       D_LOOP: for (my $idesc = 0; $idesc < @desc; $idesc++) {
             my $id = $desc[$idesc];
-            my ($f, $x, $y) = unpack 'AA2A3', $id;
+            my $f = substr($id,0,1);
+            my $x = substr($id,1,2);
+            my $y = substr($id,3,3);
 
             if ($f == 1) {
                 # Delayed replication
@@ -3308,28 +3458,39 @@ sub _encode_bitstream {
 
                 my $next_id = $desc[$idesc+1];
                 _croak "$id Erroneous replication factor"
-                    unless $next_id =~ /0310(00|01|02|11|12)/ && exists $B_table->{$next_id};
+                    unless $next_id =~ /^0310(00|01|02|11|12)/ && exists $B_table->{$next_id};
                 _croak "Descriptor no $idesc is $desc_ref->[$idesc], expected $next_id"
                     if $desc_ref->[$idesc] != $next_id;
                 my $factor = $data_ref->[$idesc];
                 my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$next_id};
-                $self->_spew(3, "%6s  %-20s  %s", $next_id, $unit, $name);
-                $self->_spew(3, "  %s", $factor);
+                if ($Spew) {
+                    $self->_spew(3, "%6s  %-20s  %s", $next_id, $unit, $name);
+                    $self->_spew(3, "  %s", $factor);
+                }
                 ($bitstream, $pos, $maxlen)
                     = $self->_encode_value($factor,$isub,$unit,$scale,$refval,
                                            $width,$next_id,$bitstream,$pos,$maxlen);
-                # Include the delayed replication in descriptor list
+                # Include the delayed replication/repetition in descriptor list
                 splice @desc, $idesc++, 0, $next_id;
 
                 my @r = ();
                 push @r, @desc[($idesc+2)..($idesc+$x+1)] while $factor--;
-                $self->_spew(4, "Delayed replication ($id $next_id -> @r)");
                 splice @desc, $idesc, 2+$x, @r;
 
+                if ($next_id eq '031011' || $next_id eq '031012') {
+                    # For delayed repetition we should include data just
+                    # once, so skip to the last set in data array
+                    $idesc += $x * ($data_ref->[$idesc-1] - 1);
+                    # We ought to check that the data sets we skipped are
+                    # indeed equal to the last set!
+                    $self->_spew(4, "Delayed repetition ($id $next_id -> @r)") if $Spew;
+                } else {
+                    $self->_spew(4, "Delayed replication ($id $next_id -> @r)") if $Spew;
+                }
                 if ($idesc < @desc) {
                     redo D_LOOP;
                 } else {
-                    last D_LOOP;
+                    last D_LOOP; # Might happen if delayed factor is 0
                 }
 
             } elsif ($f == 2) {
@@ -3401,7 +3562,7 @@ sub _encode_bitstream {
                 my $unit = 'NUMERIC';
                 my ($scale, $refval) = (0, 0);
                 my $width = $self->{ADD_ASSOCIATED_FIELD};
-                $self->_spew(4, "Added associated field: %s", $value);
+                $self->_spew(4, "Added associated field: %s", $value) if $Spew;
                 ($bitstream, $pos, $maxlen)
                     = $self->_encode_value($value,$isub,$unit,$scale,$refval,$width,999999,$bitstream,$pos,$maxlen);
                 # Insert the artificial 999999 descriptor for the
@@ -3417,9 +3578,9 @@ sub _encode_bitstream {
             # the quality information applies, as well as the new
             # index ($idesc) in the descriptor array for the bit
             # mapped values
-            if ($id =~ /^033/
-                and defined $self->{BITMAP_OPERATORS}
-                and $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
+            if (substr($id,0,3) eq '033'
+                && defined $self->{BITMAP_OPERATORS}
+                && $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
                 my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
                 _croak "$id: Not enough quality values provided"
                     unless defined $data_idesc;
@@ -3457,10 +3618,68 @@ sub _encode_bitstream {
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
             $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
                 && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
-            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
-            $self->_spew(3, "  %s", defined $value ? $value : 'missing');
-            ($bitstream, $pos, $maxlen)
-                = $self->_encode_value($value,$isub,$unit,$scale,$refval,$width,$id,$bitstream,$pos,$maxlen);
+            if ($Spew) {
+                $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
+                $self->_spew(3, "  %s", defined $value ? $value : 'missing');
+            }
+########### call to_encode_value inlined for speed
+    # Override Table B values if Data Description Operators are in
+    # effect (except for associated fields)
+    if ($self->{NUM_CHANGE_OPERATORS} > 0 && $id != 999999) {
+        $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+        $width = $self->{CHANGE_CCITTIA5_WIDTH}
+            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+        _croak "$id Data width is $width which is <= 0" if $width <= 0;
+        $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
+                && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
+        # Difference statistical values use different width and reference value
+        if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
+            $width += 1;
+            $refval = -2**$width;
+            undef $self->{DIFFERENCE_STATISTICAL_VALUE};
+            $self->{NUM_CHANGE_OPERATORS}--;
+        }
+    }
+
+    # Ensure that bitstream is big enough to encode $value
+    while ($pos + $width > $maxlen*8) {
+        $bitstream .= chr(255) x $maxlen;
+        $maxlen *= 2;
+    }
+
+    if (not defined($value)) {
+        # Missing value is encoded as 1 bits
+        $pos += $width;
+    } elsif ($unit eq 'CCITTIA5') {
+        # Encode ASCII string in $width bits (left justified,
+        # padded with spaces)
+        my $num_bytes = int ($width/8);
+        _croak "Ascii string too long to fit in $width bits: $value"
+            if length($value) > $num_bytes;
+        $value .= ' ' x ($num_bytes - length($value));
+        ascii2bitstream($value, $bitstream, $pos, $num_bytes);
+        $pos += $width;
+    } else {
+        # Encode value as integer in $width bits
+        _croak "Value '$value' is not a number for descriptor $id"
+            unless looks_like_number($value);
+        $value = int( $value * $powers_of_ten[$scale] - $refval + 0.5 );
+        _croak "Encoded data value for $id is negative: $value" if $value < 0;
+        _croak "Encoded data value for $id is too big to fit in $width bits: $value"
+            if $value > 2**$width - 1;
+        # Check for illegal flag value
+        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $width > 1) {
+            if ($value % 2) {
+                my $max_value = 2**$width - 1;
+                _complain("$id - $value: rightmost bit $width is set indicating missing value"
+                          . " but then value should be $max_value");
+            }
+        }
+        dec2bitstream($value, $bitstream, $pos, $width);
+        $pos += $width;
+    }
+########### end inlining of_encode_value
         } # End D_LOOP
     } # END S_LOOP
 
@@ -3492,7 +3711,7 @@ sub _encode_reference_value {
     }
 
     $self->_spew(4, "Encoding new reference value %d for %6s in %d bits",
-                 $refval, $id, $width);
+                 $refval, $id, $width) if $Spew;
     if ($refval >= 0) {
         _croak "Encoded reference value for $id is too big to fit "
             . "in $width bits: $refval"
@@ -3517,7 +3736,7 @@ sub _encode_value {
 
     # Override Table B values if Data Description Operators are in
     # effect (except for associated fields)
-    if ($id != 999999) {
+    if ($self->{NUM_CHANGE_OPERATORS} > 0 && $id != 999999) {
         $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
         $width = $self->{CHANGE_CCITTIA5_WIDTH}
             if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
@@ -3530,6 +3749,7 @@ sub _encode_value {
             $width += 1;
             $refval = -2**$width;
             undef $self->{DIFFERENCE_STATISTICAL_VALUE};
+            $self->{NUM_CHANGE_OPERATORS}--;
         }
     }
 
@@ -3589,7 +3809,7 @@ sub _encode_compressed_reference_value {
     }
 
     $self->_spew(4, "Encoding new reference value %d for %6s in %d bits",
-                 $refval, $id, $width);
+                 $refval, $id, $width) if $Spew;
     # Encode value as integer in $width bits
     if ($refval >= 0) {
         _croak "Encoded reference value for $id is too big to fit "
@@ -3617,7 +3837,7 @@ sub _encode_compressed_value {
 
     # Override Table B values if Data Description Operators are in
     # effect (except for associated fields)
-    if ($id != 999999) {
+    if ($self->{NUM_CHANGE_OPERATORS} > 0 && $id != 999999) {
         $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
         $width = $self->{CHANGE_CCITTIA5_WIDTH}
             if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
@@ -3629,6 +3849,7 @@ sub _encode_compressed_value {
             $width += 1;
             $refval = -2**$width;
             undef $self->{DIFFERENCE_STATISTICAL_VALUE};
+            $self->{NUM_CHANGE_OPERATORS}--;
         }
     }
 
@@ -3646,8 +3867,18 @@ sub _encode_compressed_value {
         if (defined($value) && $unit ne 'CCITTIA5' && !looks_like_number($value)) {
             _croak "Value '$value' is not a number for descriptor $id"
         }
-        $all_equal = _check_equality($first_value, $value, $unit)
-            if $all_equal;
+        # This used to be a sub (_check_equality), but inlined for speed
+        if ($all_equal) {
+            if (defined $value && defined $first_value) {
+                if ($unit eq 'CCITTIA5') {
+                    $all_equal = 0 if $value ne $first_value;
+                } else {
+                    $all_equal = 0 if $value != $first_value;
+                }
+            } elsif (defined $value || defined $first_value) {
+                $all_equal = 0;
+            }
+        }
         if (not defined $value) {
             push @values, undef;
         } elsif ($unit eq 'CCITTIA5') {
@@ -3741,18 +3972,18 @@ sub _encode_compressed_value {
                 ?_get_number_of_bits_to_store($max_inc)
                     : _get_number_of_bits_to_store($max_inc + 1);
             # Store local reference value
-            $self->_spew(5, " Local reference value: %d", $min_value);
+            $self->_spew(5, " Local reference value: %d", $min_value) if $Spew;
             dec2bitstream($min_value, $bitstream, $pos, $width);
             $pos += $width;
             # Store increment width
-            $self->_spew(5, " Increment width (bits): %d", $deltabits);
+            $self->_spew(5, " Increment width (bits): %d", $deltabits) if $Spew;
             dec2bitstream($deltabits, $bitstream, $pos, 6);
             $pos += 6;
             # Store values
             $self->_spew(5, " Increment values: %s",
                          join(',', map { defined $inc_values[$_]
                          ? $inc_values[$_] : ''} 0..$#inc_values))
-                         if $self->{VERBOSE} >= 5;
+                         if $Spew;
             foreach my $value (@inc_values) {
                 if (defined $value) {
                     dec2bitstream($value, $bitstream, $pos, $deltabits);
@@ -3771,7 +4002,7 @@ sub _encode_compressed_value {
 ## Encode bitstream using the data values in $data_refs, first
 ## expanding section 3 fully (and comparing with $desc_refs to check
 ## for consistency). This sub is very similar to sub
-## _decode_compressed_bitstream
+## _decompress_bitstream
 sub _encode_compressed_bitstream {
     my $self = shift;
     my ($data_refs, $desc_refs) = @_;
@@ -3781,8 +4012,13 @@ sub _encode_compressed_bitstream {
     # delayed replication has to be the same (this needs to be
     # checked) for compression to be possible
     my @unexpanded = split / /, $self->{DESCRIPTORS_UNEXPANDED};
-    $self->{DESCRIPTORS_EXPANDED}
-        = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+    my $alias = "$self->{TABLE_VERSION} " . $self->{DESCRIPTORS_UNEXPANDED};
+    if (exists $Descriptors_already_expanded{$alias}) {
+        $self->{DESCRIPTORS_EXPANDED} = $Descriptors_already_expanded{$alias};
+    } else {
+        $Descriptors_already_expanded{$alias} = $self->{DESCRIPTORS_EXPANDED}
+            = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+    }
     my @desc = split /\s/, $self->{DESCRIPTORS_EXPANDED};
 
     my $nsubsets = $self->{NUM_SUBSETS};
@@ -3808,7 +4044,9 @@ sub _encode_compressed_bitstream {
 
   D_LOOP: for (my $idesc = 0; $idesc < @desc; $idesc++) {
         my $id = $desc[$idesc];
-        my ($f, $x, $y) = unpack 'AA2A3', $id;
+        my $f = substr($id,0,1);
+        my $x = substr($id,1,2);
+        my $y = substr($id,3,3);
 
         if ($f == 1) {
             # Delayed replication
@@ -3822,29 +4060,40 @@ sub _encode_compressed_bitstream {
 
             my $next_id = $desc[$idesc+1];
             _croak "$id Erroneous replication factor"
-                unless $next_id =~ /0310(00|01|02|11|12)/ && exists $B_table->{$next_id};
+                unless $next_id =~ /^0310(00|01|02|11|12)/ && exists $B_table->{$next_id};
             _croak "Descriptor no $idesc is $desc_ref->[$idesc], expected $next_id"
                 if $desc_ref->[$idesc] != $next_id;
             my $factor = $data_refs->[1][$idesc];
             my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$next_id};
-            $self->_spew(3, "%6s  %-20s  %s", $next_id, $unit, $name);
-            $self->_spew(3, "  %s", $factor);
+            if ($Spew) {
+                $self->_spew(3, "%6s  %-20s  %s", $next_id, $unit, $name);
+                $self->_spew(3, "  %s", $factor);
+            }
             ($bitstream, $pos, $maxlen)
                 = $self->_encode_compressed_value($bitstream,$pos,$maxlen,
                                                   $unit,$scale,$refval,$width,
                                                   $next_id,$data_refs,$idesc,$nsubsets);
-            # Include the delayed replication in descriptor list
+            # Include the delayed replication/repetition in descriptor list
             splice @desc, $idesc++, 0, $next_id;
 
             my @r = ();
             push @r, @desc[($idesc+2)..($idesc+$x+1)] while $factor--;
-            $self->_spew(4, "Delayed replication ($id $next_id -> @r)");
             splice @desc, $idesc, 2+$x, @r;
 
+            if ($next_id eq '031011' || $next_id eq '031012') {
+                # For delayed repetition we should include data just
+                # once, so skip to the last set in data array
+                $idesc += $x * ($data_refs->[1][$idesc-1] - 1);
+                # We ought to check that the data sets we skipped are
+                # indeed equal to the last set!
+                $self->_spew(4, "Delayed repetition ($id $next_id -> @r)") if $Spew;
+            } else {
+                $self->_spew(4, "Delayed replication ($id $next_id -> @r)") if $Spew;
+            }
             if ($idesc < @desc) {
                 redo D_LOOP;
             } else {
-                last D_LOOP;
+                last D_LOOP; # Might happen if delayed factor is 0
             }
 
         } elsif ($f == 2) {
@@ -3925,8 +4174,10 @@ sub _encode_compressed_bitstream {
             my $unit = 'NUMERIC';
             my ($scale, $refval) = (0, 0);
             my $width = $self->{ADD_ASSOCIATED_FIELD};
-            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
-            $self->_spew(3, "  %s", 999999);
+            if ($Spew) {
+                $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
+                $self->_spew(3, "  %s", 999999);
+            }
             ($bitstream, $pos, $maxlen)
                 = $self->_encode_compressed_value($bitstream,$pos,$maxlen,
                                                   $unit,$scale,$refval,$width,
@@ -3944,9 +4195,9 @@ sub _encode_compressed_bitstream {
         # the quality information applies, as well as the new
         # index ($idesc) in the descriptor array for the bit
         # mapped values
-        if ($id =~ /^033/
-            and defined $self->{BITMAP_OPERATORS}
-            and $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
+        if (substr($id,0,3) eq '033'
+            && defined $self->{BITMAP_OPERATORS}
+            && $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
             my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
             _croak "$id: Not enough quality values provided"
                 unless defined $data_idesc;
@@ -3981,11 +4232,12 @@ sub _encode_compressed_bitstream {
         _croak "Data descriptor $id is not present in BUFR table B"
             unless exists $B_table->{$id};
         my ($name,$unit,$scale,$refval,$width) = split /\0/, $B_table->{$id};
-        $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
-        $self->_spew(3, "  %s", join ' ',
-                     map { defined($data_refs->[$_][$idesc]) ?
-                     $data_refs->[$_][$idesc] : 'missing'} 1..$nsubsets )
-                     if $self->{VERBOSE} >= 3;
+        if ($Spew) {
+            $self->_spew(3, "%6s  %-20s  %s", $id, $unit, $name);
+            $self->_spew(3, "  %s", join ' ',
+                         map { defined($data_refs->[$_][$idesc]) ?
+                                   $data_refs->[$_][$idesc] : 'missing'} 1..$nsubsets );
+        }
         ($bitstream, $pos, $maxlen)
             = $self->_encode_compressed_value($bitstream,$pos,$maxlen,
                                               $unit,$scale,$refval,$width,
@@ -4039,13 +4291,17 @@ sub _check_section4_length {
     return;
 }
 
-# Trim string, also for trailing nulls
+# Trim string, also removing nulls (and _complain if nulls found)
 sub _trim {
-    my $str = shift;
+    my ($str, $id) = @_;
     return unless defined $str;
-    $str =~ s/\0+$//;
+    if ($str =~ /\0/) {
+        (my $str2 = $str) =~ s|\0|\\0|g;
+        _complain("Nulls (" . '\0'
+                  . ") found in string '$str2' for descriptor $id");
+        $str =~ s/\0//g;
+    }
     $str =~ s/\s+$//;
-    $str =~ s/\0+$//;
     $str =~ s/^\s+//;
     return $str;
 }
@@ -4104,28 +4360,12 @@ sub _get_number_of_bits_to_store {
     return ($x == $n )? $i + 1 : $i;
 }
 
-sub _check_equality {
-    my ($v, $w, $unit) = @_;
-    if (defined $v and defined $w) {
-        if ($unit eq 'CCITTIA5') {
-            return 0 if $v ne $w;
-        } else {
-            return 0 if $v != $w;
-        }
-    } elsif (defined $v or defined $w) {
-        return 0;
-    }
-    return 1;
-}
-
-
-
 ## Find minimum value among set of numbers (undefined values
 ## permitted, but at least one value must be defined). Also returns
 ## for which number the minimum occurs (counting from 1).
 sub _minimum {
     my $v_ref = shift;
-    my $min = 9999999999;
+    my $min = 2**63;
     my $idx = 0;
     my $i=0;
     foreach my $v (@{$v_ref}) {
@@ -4175,44 +4415,52 @@ sub _apply_operator_descriptor {
     if (/^20[1238]000/) {
         # Cancellation of a data descriptor operator
         _complain("$id Cancelling unused operator")
-            unless grep {$_ == $x} @operators;
+            if $Strict_checking and !grep {$_ == $x} @operators;
         @operators = grep {$_ != $x} @operators;
-      SWITCH: {
-            $x == 1 and undef $self->{CHANGE_WIDTH}, last SWITCH;
-            $x == 2 and undef $self->{CHANGE_SCALE}, last SWITCH;
-            $x == 3 and undef $self->{NEW_REFVAL_OF}, last SWITCH;
-            $x == 8 and undef $self->{CHANGE_CCITTIA5_WIDTH}, last SWITCH;
+        if ($x == 1) {
+            $self->{NUM_CHANGE_OPERATORS}-- if $self->{CHANGE_WIDTH};
+            undef $self->{CHANGE_WIDTH};
+        } elsif ($x == 2) {
+            $self->{NUM_CHANGE_OPERATORS}-- if $self->{CHANGE_SCALE};
+            undef $self->{CHANGE_SCALE};
+        } elsif ($x == 3) {
+            $self->{NUM_CHANGE_OPERATORS}-- if $self->{NEW_REFVAL_OF};
+            undef $self->{NEW_REFVAL_OF};
+        } elsif ($x == 8) {
+            $self->{NUM_CHANGE_OPERATORS}-- if $self->{CHANGE_CCITTIA5_WIDTH};
+            undef $self->{CHANGE_CCITTIA5_WIDTH};
         }
         $self->_spew(4, "$id * Reset ".
-                     ("width of CCITTIA5 field","data width","scale","reference values",)[$x % 8]);
+                     ("width of CCITTIA5 field","data width","scale","reference values",)[$x % 8]) if $Spew;
         $flow = 'next';
     } elsif (/^201/) {
         # Change data width
+        $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_WIDTH};
         $self->{CHANGE_WIDTH} = $y-128;
-        $self->_spew(4, "$id * Change data width: "
-                     . "$self->{CHANGE_WIDTH}");
+        $self->_spew(4, "$id * Change data width: $self->{CHANGE_WIDTH}") if $Spew;
         push @operators, $x;
         $flow = 'next';
     } elsif (/^202/) {
         # Change scale
+        $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_SCALE};
         $self->{CHANGE_SCALE} = $y-128;
-        $self->_spew(4, "$id * Change scale: "
-                     . "$self->{CHANGE_SCALE}");
+        $self->_spew(4, "$id * Change scale: $self->{CHANGE_SCALE}") if $Spew;
         push @operators, $x;
         $flow = 'next';
     } elsif (/^203255/) {
-        # Stop redefining reference values
+        # Terminate change reference value definition
         $self->_spew(4, "$id * Terminate reference value definition %s",
                      '203' . (defined $self->{CHANGE_REFERENCE_VALUE}
-                     ? sprintf("%03d", $self->{CHANGE_REFERENCE_VALUE}) : '???'));
+                     ? sprintf("%03d", $self->{CHANGE_REFERENCE_VALUE}) : '???')) if $Spew;
         _complain("$id no current change reference value to terminate")
             unless defined $self->{CHANGE_REFERENCE_VALUE};
         undef $self->{CHANGE_REFERENCE_VALUE};
         $flow = 'next';
     } elsif (/^203/) {
         # Change reference value
-        $self->_spew(4, "$id * Change reference value");
+        $self->_spew(4, "$id * Change reference value") if $Spew;
         # Get reference value from data stream ($y == number of bits)
+        $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_REFERENCE_VALUE};
         $self->{CHANGE_REFERENCE_VALUE} = $y;
         push @operators, $x;
         $flow = 'next';
@@ -4241,11 +4489,11 @@ sub _apply_operator_descriptor {
         # descriptor and the corresponding value
         if (exists $self->{B_TABLE}->{$next_id}
             and (split /\0/, $self->{B_TABLE}->{$next_id})[-1] == $y) {
-            $self->_spew(4, "Found $next_id with data width $y, ignoring $_");
+            $self->_spew(4, "Found $next_id with data width $y, ignoring $_") if $Spew;
             $flow = 'next';
         } else {
             $self->_spew(4, "$_: Did not find $next_id in table B."
-                         . " Skipping $_ and $next_id.");
+                         . " Skipping $_ and $next_id.") if $Spew;
             $pos += $y;         # Skip next $y bits in bitstream
             $flow = 'skip';
         }
@@ -4255,9 +4503,10 @@ sub _apply_operator_descriptor {
         _croak "$id Increase scale, reference value and data width (not implemented)";
     } elsif (/^208/) {
         # Change data width for ascii data
+        $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_CCITTIA5_WIDTH};
         $self->{CHANGE_CCITTIA5_WIDTH} = $y*8;
         $self->_spew(4, "$id * Change width for CCITTIA5 field: "
-                     . "%d bytes", $y);
+                     . "%d bytes", $y) if $Spew;
         push @operators, $x;
         $flow = 'next';
     } elsif (/^222000/) {
@@ -4319,6 +4568,7 @@ sub _apply_operator_descriptor {
             unless @{$self->{CURRENT_BITMAP}};
         $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
         # Must remember to change data width and reference value
+        $self->{NUM_CHANGE_OPERATORS}++ if !$self->{DIFFERENCE_STATISTICAL_VALUE};
         $self->{DIFFERENCE_STATISTICAL_VALUE} = 1;
         $flow = 'redo_bitmap';
     } elsif (/^232000/) {
@@ -4389,7 +4639,7 @@ sub join_subsets {
         if (!exists $subset_list[$i]) { # grab all subsets from this object
             while (not $bufr[$i]->eof()) {
                 my ($data, $descriptors) = $bufr[$i]->next_observation();
-                $self->_spew(2, "Joining subset $isub from bufr object $i");
+                $self->_spew(2, "Joining subset $isub from bufr object $i") if $Spew;
                 $data_refs->[$n] = $data;
                 $desc_refs->[$n++] = $descriptors;
                 $isub++;
@@ -4400,7 +4650,7 @@ sub join_subsets {
                 my ($data, $descriptors) = $bufr[$i]->next_observation();
                 my $index = _get_index_in_list($subset_list[$i], $isub);
                 if (defined $index) {
-                    $self->_spew(2, "Joining subset $isub from bufr object $i");
+                    $self->_spew(2, "Joining subset $isub from bufr object $i") if $Spew;
                     $data_refs->[$n + $index] = $data;
                     $desc_refs->[$n + $index] = $descriptors;
                     $num_found++;
@@ -4522,7 +4772,7 @@ Copy from an existing object:
 
 If $what is 'all' or not provided, will copy everything in $bufr2 into
 $bufr1, i.e. making a clone. If $what is 'metadata', only the metadata
-in section 0, 1 and 3 will be copied.
+in section 0, 1 and 3 will be copied (and all of section 2 if present).
 
 Load B and D tables:
 
@@ -4751,7 +5001,7 @@ undef for missing values. The required metadata in section 0, 1 and 3
 must have been set in $bufr before calling this method. See
 L</DECODING/ENCODING> for meaning of 'fully expanded descriptors'.
 
-Encode a NIL message:
+Encode a (single subset) NIL message:
 
   $new_message = $bufr->encode_nil_message($stationid_ref,$delayed_repl_ref);
 
@@ -4765,8 +5015,8 @@ have values 3, 1 and 2, in that succession. If $delayed_repl_ref is
 omitted, all delayed replication factors will be set to 1. The
 required metadata in section 0, 1 and 3 must have been set in $bufr
 before calling this method (although number of subsets and BUFR
-compression will automatically be set to 0 whatever value they had
-before).
+compression will automatically be set to 1 and 0 respectively,
+whatever value they had before).
 
 Reencode BUFR message(s):
 
@@ -4911,20 +5161,25 @@ The term 'fully expanded descriptors' used in the description of
 C<encode_message> (and C<next_observation>) in L</METHODS> might need
 some clarification. The short version is that the list of descriptors
 should be exactly those which will be written out by running
-C<dumpsection4> (or C<bufrread.pl> without any modifying options set) on
-the encoded message. If you don't have a similar BUFR message at hand
-to use as an example when wanting to encode a new message, you might
-need a more specific prescription. Which is that for every data value
-which occurs in the section 4 bitstream, you should include the
+C<dumpsection4> (or C<bufrread.pl> without any modifying options set)
+on the encoded message. If you don't have a similar BUFR message at
+hand to use as an example when wanting to encode a new message, you
+might need a more specific prescription. Which is that for every data
+value which occurs in the section 4 bitstream, you should include the
 corresponding BUFR descriptor, using the artificial 999999 for
 associated fields following the 204Y operator, I<and> including the
 data operator descriptors 22[2345]000 and 23[2567]000 with data value
 set to the empty string, if these occurs among the descriptors in
 section 3 (rather: in the expansion of these, use C<bufrresolve.pl> to
 check!). Element descriptors defining new reference values (following
-the 203Y operator) will have f=0 (first digit in descriptor) replaced
-with f=9 in C<next_observation>, while in C<encode_message> both f=0
-and f=9 will be accepted for new reference values.
+the 203Y operator) will have F=0 (first digit in descriptor) replaced
+with F=9 in C<next_observation>, while in C<encode_message> both F=0
+and F=9 will be accepted for new reference values. When encoding
+delayed repetition you should repeat the set of data (and descriptors)
+to be repeated the number of times indicated by 031011 or 031012 (if
+given the feedback that this is considered cumbersome, an option for
+including the set of data/descriptors just once might be added later,
+both for encoding end decoding).
 
 Some words about the procedure used for decoding and encoding data in
 section 4 might shed some light on this choice of design.
@@ -4932,11 +5187,11 @@ section 4 might shed some light on this choice of design.
 When decoding section 4 for a subset, first of all the BUFR
 descriptors provided in section 3 are expanded as far as is possible
 without looking at the actual bitstream, i.e. by eliminating
-nondelayed replication descriptors (f=1) and by using BUFR table D to
-expand sequence descriptors (f=3). Then, for each of the thus expanded
+nondelayed replication descriptors (F=1) and by using BUFR table D to
+expand sequence descriptors (F=3). Then, for each of the thus expanded
 descriptors, the data value is fetched from the bitstream according to
 the prescriptions in BUFR table B, applying the data operator
-descriptors (f=2) from BUFR table C as they are encountered, and
+descriptors (F=2) from BUFR table C as they are encountered, and
 reexpanding the remaining descriptors every time a delayed replication
 factor is fetched from bitstream. The resulting set of data values is
 returned in an array @data, with the corresponding B (and sometimes
@@ -4968,11 +5223,8 @@ $desc_ref as input, the risk for encoding an erronous section 4 is
 thus greatly reduced, and also provides the user with highly valuable
 debugging information if encoding fails.
 
-Note that for character data (unit CCITTIA5) FM 94 BUFR does not
-provide any guidelines for how to encode strings which are shorter
-than the data width. In Geo::BUFR the following procedure is followed:
-When encoding, the requested string is right padded with blanks. When
-decoding, any trailing null characters are silently removed, as well
+When decoding character data (unit CCITTIA5), any null characters
+found are silently (unless $Strict_checking is set) removed, as well
 as leading and trailing white space.
 
 =head1 BUFR TABLE FILES
@@ -5015,7 +5267,16 @@ Excessive bytes in section 4 (section longer than computed from section 3)
 
 =item *
 
-Illegal flag values (rightmost bit set for non-missing values)
+Total length of BUFR message as stated in section 0 bigger than actual length
+
+=item *
+
+Illegal flag values (rightmost bit set for non-missing values) (Note (9)
+to Table B in FM 94 BUFR)
+
+=item *
+
+Null characters in CCITTIA5 data (Note (4) to Table B in FM 94 BUFR)
 
 =item *
 
@@ -5030,25 +5291,10 @@ Invalid date and/or time in section 1
 Plus some few more checks not considered interesting enough to be
 mentioned here.
 
-To the above list I would have liked to add
-
-=over
-
-=item *
-
-Trailing null characters in CCITTIA5 data
-
-=back
-
-but for the reason given at the end of the C<DECODING/ENCODING>
-section, I have restrained from that. If you want to see what
-character data was originally encoded (including nulls and blanks) in
-a BUFR file, use C<bufrread.pl> with option C<--verbose 5>.
-
 =begin more_on_strict_checking
 
 These are:
-- Replication of 0 descriptors (f=1, x=0)
+- Replication of 0 descriptors (F=1, X=0)
 - year_of_century > 100
 
 =end more_on_strict_checking

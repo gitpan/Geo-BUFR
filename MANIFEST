@@ -41,6 +41,10 @@ t/change_refval.txt
 t/change_refval_compressed.bufr
 t/change_refval_compressed.txt
 t/codetable.txt
+t/delayed_repetition.bufr
+t/delayed_repetition.txt
+t/delayed_repetition_compressed.bufr
+t/delayed_repetition_compressed.txt
 t/encoded_ed3
 t/encoded_ed4
 t/filter

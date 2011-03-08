@@ -40,6 +40,7 @@ GetOptions(
            'filter=s',     # Decode observations meeting criteria in <filter file> only
            'help',         # Print help information and exit
            'noqc',         # Do not decode quality control
+           'on_error_stop', # Stop processing if an error occurs
            'optional_section',  # Display a hex dump of optional section if present
            'outfile=s',    # Print to file instead of STDOUT
            'param=s',      # Decode parameters with descriptors in <descriptor file> only
@@ -155,6 +156,7 @@ sub decode {
                     if $current_ahl;
                 warn $error_msg if $error_msg;
             };
+            exit(1) if $option{on_error_stop};
             next READLOOP;
         }
 
@@ -406,6 +408,7 @@ sub filter_observation {
       [--optional_section]
       [--width n]
       [--strict_checking n]
+      [--on_error_stop]
       [--all_operators]
       [--tablepath <path to BUFR tables>]
       [--verbose n]
@@ -445,6 +448,7 @@ examples of use.
                            BUFR format
                        n=2 Croak if (recoverable) error in BUFR format.
                            Nothing more in this message will be decoded.
+   --on_error_stop Stop processing as soon as an error occurs during decoding
    --all_operators Show all operator descriptors when printing section 4
    --tablepath <path to BUFR tables>
                    Set path to BUFR tables (overrides ENV{BUFR_TABLES})
@@ -492,7 +496,8 @@ single line only:
 
 If an error occurs during decoding (typically because the required
 BUFR table is missing or message is corrupt) the message is skipped,
-and the number of errors is reported at end of output.
+and the number of errors is reported at end of output. You can change
+this default behaviour, however, by setting C<--on_error_stop>.
 
 =head1 AUTHOR
 

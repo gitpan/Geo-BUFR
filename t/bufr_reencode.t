@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 6;
+use Test::More tests => 8;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -42,3 +42,16 @@ $output = read_file('t/out');
 $expected = read_file('t/208035.bufr');
 unlink 't/out';
 is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 208Y');
+
+`$perl ./bufr_reencode.pl t/delayed_repetition.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/delayed_repetition.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 030011');
+
+`$perl ./bufr_reencode.pl t/delayed_repetition_compressed.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/delayed_repetition_compressed.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 030011 (compressed)');
+
