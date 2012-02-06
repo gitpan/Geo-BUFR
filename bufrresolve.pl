@@ -85,7 +85,7 @@ if ($option{tablepath}) {
     # If no --tablepath option, use the BUFR_TABLES environment variable
     Geo::BUFR->set_tablepath($ENV{BUFR_TABLES});
 } else {
-    # If all else fails, use the libemos bufrtables
+    # If all else fails, use the libbufr bufrtables
     Geo::BUFR->set_tablepath(DEFAULT_TABLE_PATH);
 }
 

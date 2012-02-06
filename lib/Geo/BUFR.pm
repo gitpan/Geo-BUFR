@@ -83,7 +83,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.20';
+our $VERSION = '1.21';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -775,7 +775,7 @@ sub _read_B_table {
     my $fname = "B$version.TXT";
     my $path = _locate_table($fname)
         or _croak "Couldn't find BUFR table $fname in $BUFR_table{PATH}."
-            . "Wrong tablepath?";
+            . " Wrong tablepath?";
 
     my %B_table;
 
@@ -1346,8 +1346,14 @@ sub _next_message {
     if (exists $Descriptors_already_expanded{$alias}) {
         $self->{DESCRIPTORS_EXPANDED} = $Descriptors_already_expanded{$alias};
     } else {
-        $Descriptors_already_expanded{$alias} = $self->{DESCRIPTORS_EXPANDED}
-            = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+        eval {
+            $Descriptors_already_expanded{$alias} = $self->{DESCRIPTORS_EXPANDED}
+                = join " ", _expand_descriptors($self->{D_TABLE}, @unexpanded);
+        };
+        if ($@) {
+            $self->{ERROR_IN_MESSAGE} = 1;
+            die $@, "\n";
+        }
     }
 
     # Unpack data from bitstream
@@ -1396,6 +1402,13 @@ sub next_observation {
         undef $self->{CHANGE_REFERENCE_VALUE};
         undef $self->{NEW_REFVAL_OF};
         undef $self->{ADD_ASSOCIATED_FIELD};
+        # If _next_message is croaking, what is returned from
+        # next_observation is (mysteriously) what was returned last
+        # time next_observation was called, while this reset (also
+        # mysteriously) prevents that. Anyway, this tidying ought
+        # to be done for other reasons also
+        undef $self->{DATA};
+        undef $self->{DESC};
 
         $self->_next_message();
     }
@@ -4291,7 +4304,8 @@ sub _check_section4_length {
     return;
 }
 
-# Trim string, also removing nulls (and _complain if nulls found)
+# Trim string, also removing nulls (and _complain if nulls found).
+# If strict_checking, checks also for bit 1 set in each character
 sub _trim {
     my ($str, $id) = @_;
     return unless defined $str;
@@ -4303,6 +4317,13 @@ sub _trim {
     }
     $str =~ s/\s+$//;
     $str =~ s/^\s+//;
+
+    if ($Strict_checking && $str ne '') {
+        while ($str =~ /(.)/g) {
+            _complain("Character $1 in string '$str' is not allowed in CCITTA5")
+                if ord($1) > 127;
+        }
+    }
     return $str;
 }
 
@@ -4337,6 +4358,11 @@ sub _validate_datetime {
                                    : $self->{YEAR};
     my $month = $self->{MONTH} - 1;
     my $second = ($bufr_edition == 4) ? $self->{SECOND} : 0;
+
+    # All datetime variables set to 0 should be considered ok
+    return if ($self->{MINUTE} == 0 && $self->{HOUR} == 0
+           && $self->{DAY} == 0 && $self->{MONTH} == 0
+           && $second == 0 && ($year == 0 || $year == 2000));
 
     eval {
         my $dummy = timegm($second,$self->{MINUTE},$self->{HOUR},
@@ -4509,6 +4535,12 @@ sub _apply_operator_descriptor {
                      . "%d bytes", $y) if $Spew;
         push @operators, $x;
         $flow = 'next';
+    } elsif (/^209/) {
+        # IEEE floating point representation
+        _croak "$id IEEE floating point representation (not implemented)";
+    } elsif (/^221/) {
+        # Data not present
+        _croak "$id Data not present (not implemented)";
     } elsif (/^222000/) {
         # Quality information follows
         push @{ $self->{BITMAP_OPERATORS} }, '222000';
@@ -4599,6 +4631,24 @@ sub _apply_operator_descriptor {
             unless defined $self->{LAST_BITMAP};
         undef $self->{LAST_BITMAP};
         $flow = 'next';
+    } elsif (/^241000/) {
+        # Define event
+        _croak "$id Define event (not implemented)";
+    } elsif (/^241255/) {
+        # Cancel define event
+        _croak "$id Cancel define event (not implemented)";
+    } elsif (/^242000/) {
+        # Define conditioning event
+        _croak "$id Define conditioning event (not implemented)";
+    } elsif (/^242255/) {
+        # Cancel define conditioning event
+        _croak "$id Cancel define conditioning event (not implemented)";
+    } elsif (/^243000/) {
+        # Categorial forecast values follow
+        _croak "$id Categorial forecast values follow (not implemented)";
+    } elsif (/^243255/) {
+        # Cancel categorial forecast values follow
+        _croak "$id Cancel categorial forecast values follow (not implemented)";
     } else {
         _croak "$id Unknown data description operator";
     }
@@ -5255,6 +5305,14 @@ $Strict_checking is set to 1 or 2:
 
 =item *
 
+Total length of BUFR message as stated in section 0 bigger than actual length
+
+=item *
+
+Excessive bytes in section 4 (section longer than computed from section 3)
+
+=item *
+
 Compression set in section 1 for one subset message (BUFR reg. 94.6.3.2)
 
 =item *
@@ -5263,16 +5321,12 @@ Local reference value for compressed character data not having all bits set to z
 
 =item *
 
-Excessive bytes in section 4 (section longer than computed from section 3)
-
-=item *
-
-Total length of BUFR message as stated in section 0 bigger than actual length
-
-=item *
-
 Illegal flag values (rightmost bit set for non-missing values) (Note (9)
 to Table B in FM 94 BUFR)
+
+=item *
+
+Character data not being CCITTIA5 (Note (9) in FM 94 BUFR first page)
 
 =item *
 
@@ -5280,11 +5334,11 @@ Null characters in CCITTIA5 data (Note (4) to Table B in FM 94 BUFR)
 
 =item *
 
-Cancellation operators (20[1-4]00, 203255 etc) when there is nothing to cancel
+Invalid date and/or time in section 1
 
 =item *
 
-Invalid date and/or time in section 1
+Cancellation operators (20[1-4]00, 203255 etc) when there is nothing to cancel
 
 =back
 

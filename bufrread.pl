@@ -74,7 +74,7 @@ if ($option{tablepath}) {
     # If no --tablepath option, use the BUFR_TABLES environment variable
     Geo::BUFR->set_tablepath($ENV{BUFR_TABLES});
 } else {
-    # If all else fails, use the libemos bufrtables
+    # If all else fails, use the libbufr bufrtables
     Geo::BUFR->set_tablepath(DEFAULT_TABLE_PATH);
 }
 
@@ -292,6 +292,8 @@ sub read_filter_file {
             $num_required_criteria++ if $1;
         } else {
             my @values = split;
+            # Remove leading 0's in numerical values (to prepare for string comparison)
+            for $_ (@values) { s/^0+(\d+)$/$1/ };
             $fiv[$num_criteria]->[++$num_val[$num_criteria]] = \@values;
         }
     }
