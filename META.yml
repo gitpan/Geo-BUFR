@@ -1,22 +1,33 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         Geo-BUFR
-version:      1.21
-version_from: lib/Geo/BUFR.pm
-installdirs:  site
+--- #YAML:1.0
+name:               Geo-BUFR
+version:            1.22
+abstract:           Perl extension for handling of WMO BUFR files.
+author:
+    - P.Sannes <pal.sannes@met.no>
+license:            unknown
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
 requires:
-    Carp:                          0
-    Config:                        0
-    DynaLoader:                    0
-    File::Slurp:                   0
-    File::Spec::Functions:         0
-    FileHandle:                    0
-    Getopt::Long:                  0
-    Pod::Usage:                    0
-    Scalar::Util:                  0
-    Storable:                      0
-    Test::More:                    0
-    Time::Local:                   0
-
-distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.17
+    Carp:                 0
+    Config:               0
+    DynaLoader:           0
+    File::Slurp:          0
+    File::Spec::Functions:  0
+    FileHandle:           0
+    Getopt::Long:         0
+    Pod::Usage:           0
+    Scalar::Util:         0
+    Storable:             0
+    Test::More:           0
+    Time::Local:          0
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.55_02
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4

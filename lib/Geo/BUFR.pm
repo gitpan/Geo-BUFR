@@ -83,7 +83,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.21';
+our $VERSION = '1.22';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -880,7 +880,10 @@ sub _read_D_table {
             $D_table{$alias} .= " $line";
         } else {
             $line =~ s/^\s+//;
-            my ($ali, $n, $desc) = split /\s+/, $line;
+	    # In table version 17 a descriptor with more than 100
+	    # entries occurs, causing no space between alias and
+	    # number of entries (so split /\s+/ doesn't work)
+            my ($ali, $skip, $desc) = unpack('A6A4A6', $line);
             $alias = $ali;
             $D_table{$alias} = $desc;
         }
@@ -1607,9 +1610,11 @@ sub dumpsection4 {
             $txt .= sprintf "%6d  %06d  %${width}.${width}s  %s %06d\n",
                 ++$line_no, $id, $value, 'NEW REFERENCE VALUE FOR', $id - 900000;
             next ID;
-        } elsif ($id == 31031) { # This is the only data descriptor
+        } elsif ($id == 31031) { # This is the only data descriptor 
                                  # where all bits set to one should
                                  # not be rendered as missing value
+                                 # (for replication/repetition factors in
+                                 # class 31 $value has been adjusted already)
             $value = 1 if $value eq 'missing';
         }
         _croak "Data descriptor $id is not present in BUFR table B"
@@ -1617,13 +1622,13 @@ sub dumpsection4 {
         my ($name, $unit, $bits) = (split /\0/, $B_table->{$id})[0,1,4];
         # Code or flag table number equals $id, so no need to display this in [unit]
         my $short_unit = $unit;
-        $short_unit = 'CODE TABLE' if $unit =~ /^CODE TABLE/;
-        $short_unit = 'FLAG TABLE' if $unit =~ /^FLAG TABLE/;
+        $short_unit = 'CODE TABLE' if $unit =~ /^CODE[ ]?TABLE/;
+        $short_unit = 'FLAG TABLE' if $unit =~ /^FLAG[ ]?TABLE/;
         $txt .= sprintf "%6d  %06d  %${width}.${width}s  %s\n",
             ++$line_no, $id, $value, "$name [$short_unit]";
 
         # Check for illegal flag value
-        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $bits > 1) {
+        if ($Strict_checking and $unit =~ /^FLAG[ ]?TABLE/ and $bits > 1) {
             if ($value ne 'missing' and $value % 2) {
                 $bits += 0; # get rid of spaces
                 my $max_value = 2**$bits - 1;
@@ -1773,13 +1778,13 @@ sub dumpsection4_with_bitmaps {
         }
         # Code or flag table number equals $id, so no need to display this in [unit]
         my $short_unit = $unit;
-        $short_unit = 'CODE TABLE' if $unit =~ /^CODE TABLE/;
-        $short_unit = 'FLAG TABLE' if $unit =~ /^FLAG TABLE/;
+        $short_unit = 'CODE TABLE' if $unit =~ /^CODE[ ]?TABLE/;
+        $short_unit = 'FLAG TABLE' if $unit =~ /^FLAG[ ]?TABLE/;
         $line .=  sprintf "  %s\n", "$name [$short_unit]";
         $txt .= $line;
 
         # Check for illegal flag value
-        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $bits > 1) {
+        if ($Strict_checking and $unit =~ /^FLAG[ ]?TABLE/ and $bits > 1) {
             if ($value ne 'missing' and $value % 2) {
                 my $max_value = 2**$bits - 1;
                 $bits += 0; # get rid of spaces
@@ -1810,7 +1815,7 @@ sub _get_code_table_txt {
     my ($id,$value,$unit,$B_table,$C_table,$num_spaces,$check_illegal) = @_;
 
     my $txt = '';
-    if ($unit =~ m/^CODE TABLE/) {
+    if ($unit =~ m/^CODE[ ]?TABLE/) {
         my $code_table = sprintf "%06d", $id;
         return "Code table $code_table does not exist!\n"
             if ! exists $C_table->{$code_table};
@@ -1820,7 +1825,7 @@ sub _get_code_table_txt {
                 $txt .= sprintf "%s   %s\n", ' ' x ($num_spaces), lc $_;
             }
         }
-    } elsif ($unit =~ m/^FLAG TABLE/) {
+    } elsif ($unit =~ m/^FLAG[ ]?TABLE/) {
         my $flag_table = sprintf "%06d", $id;
         return "Flag table $flag_table does not exist!\n"
             if ! exists $C_table->{$flag_table};
@@ -2794,6 +2799,10 @@ sub _extract_compressed_value {
             my $incr_values;
             foreach my $isub (1..$nsubsets) {
                 my $value = bitstream2dec($bitstream, $pos, $deltabits);
+		_complain("value " . ($value + $minval) . " in subset $isub for "
+			  . "$id too big to be encoded without compression")
+		    if ($Strict_checking && defined $value &&
+			($value + $minval) > 2**$width);
                 $incr_values .= defined $value ? "$value," : ',' if $Spew;
                 $value = ($value + $minval) * $scale_factor if defined $value;
                 # All bits set to 1 for associated field is NOT
@@ -3682,7 +3691,7 @@ sub _encode_bitstream {
         _croak "Encoded data value for $id is too big to fit in $width bits: $value"
             if $value > 2**$width - 1;
         # Check for illegal flag value
-        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $width > 1) {
+        if ($Strict_checking and $unit =~ /^FLAG[ ]?TABLE/ and $width > 1) {
             if ($value % 2) {
                 my $max_value = 2**$width - 1;
                 _complain("$id - $value: rightmost bit $width is set indicating missing value"
@@ -3793,7 +3802,7 @@ sub _encode_value {
         _croak "Encoded data value for $id is too big to fit in $width bits: $value"
             if $value > 2**$width - 1;
         # Check for illegal flag value
-        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $width > 1) {
+        if ($Strict_checking and $unit =~ /^FLAG[ ]?TABLE/ and $width > 1) {
             if ($value % 2) {
                 my $max_value = 2**$width - 1;
                 _complain("$id - $value: rightmost bit $width is set indicating missing value"
@@ -3877,7 +3886,7 @@ sub _encode_compressed_value {
     my $first_value = $data_refs->[1][$idesc];
     my $all_equal = 1;        # Set to 0 if at least 2 elements differ
     foreach my $value ( map { $data_refs->[$_][$idesc] } 2..$nsubsets ) {
-        if (defined($value) && $unit ne 'CCITTIA5' && !looks_like_number($value)) {
+        if (defined $value && $unit ne 'CCITTIA5' && !looks_like_number($value)) {
             _croak "Value '$value' is not a number for descriptor $id"
         }
         # This used to be a sub (_check_equality), but inlined for speed
@@ -3900,7 +3909,7 @@ sub _encode_compressed_value {
             push @values, int( $value * $powers_of_ten[$scale] - $refval + 0.5 );
         }
         # Check for illegal flag value
-        if ($Strict_checking and $unit =~ /^FLAG TABLE/ and $width > 1) {
+        if ($Strict_checking and $unit =~ /^FLAG[ ]?TABLE/ and $width > 1) {
             if (defined $value and $value ne 'missing' and $value % 2) {
                 my $max_value = 2**$width - 1;
                 _complain("$id - value $value in subset $_:\n"
@@ -3999,6 +4008,9 @@ sub _encode_compressed_value {
                          if $Spew;
             foreach my $value (@inc_values) {
                 if (defined $value) {
+		    _complain("value " . ($value + $min_value) . " for $id too big"
+			      . " to be encoded without compression")
+			if ($Strict_checking && ($value + $min_value) > 2**$width -1);
                     dec2bitstream($value, $bitstream, $pos, $deltabits);
                 } else {
                     # Missing value is encoded as 1 bits, but
@@ -5317,7 +5329,8 @@ Compression set in section 1 for one subset message (BUFR reg. 94.6.3.2)
 
 =item *
 
-Local reference value for compressed character data not having all bits set to zero (94.6.3.2.i)
+Local reference value for compressed character data not having all
+bits set to zero (94.6.3.2.i)
 
 =item *
 
@@ -5339,6 +5352,17 @@ Invalid date and/or time in section 1
 =item *
 
 Cancellation operators (20[1-4]00, 203255 etc) when there is nothing to cancel
+
+=item *
+
+Value encoded using BUFR compression which would be too big to encode
+without compression. For example, for a data descriptor with data
+width 9 bits a value of 510 ought to be the biggest value possible to
+encode, but in a multisubset message using BUFR compression it is
+possible to encode almost arbitrarily large values in single subsets
+as long as the average over all subsets is contained within 9
+bits. This is not breaking any formal rules, but almost certainly not
+desirable.
 
 =back
 

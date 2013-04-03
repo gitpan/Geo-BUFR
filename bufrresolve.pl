@@ -27,7 +27,7 @@ use Geo::BUFR;
 # Will be used if neither --tablepath nor $ENV{BUFR_TABLES} is set
 use constant DEFAULT_TABLE_PATH => '/usr/local/lib/bufrtables';
 # Ought to be your most up-to-date B table
-use constant DEFAULT_TABLE => 'B0000000000000014000';
+use constant DEFAULT_TABLE => 'B0000000000000017000';
 
 # Parse command line options
 my %option = ();

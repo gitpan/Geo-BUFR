@@ -1,5 +1,13 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.22 2013-04-03
+- Format of ECMWF tables version 15-17 changed slightly from previous
+  versions, requiring some changes in processing.
+- Added strict checking for value encoded using BUFR compression which
+  would be too big to encode without compression.
+- Had to change a test script because newer versions of perl might add
+  a '.' to end of warning/error messages.
+
 1.21 2012-02-06
 - Better recovery from some error conditions (like table D descriptor
   not found).

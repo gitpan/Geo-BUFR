@@ -16,7 +16,7 @@ $expected = read_file( 't/3xBUFRSYNOP-com_filtered.txt' );
 is($output, $expected, 'testing bufrread.pl -f -p on compressed synop message');
 
 $output = `$perl ./bufrread.pl --bitmap t/substituted.bufr -t t/bt`;
-$expected = read_file( 't/substituted.txt_bitmap' ) ;
+$expected = read_file( 't/substituted.txt_bitmap' );
 is($output, $expected, 'testing bufrread.pl -b on temp message with qc and substituted values');
 
 $output = `$perl ./bufrread.pl --data_only --noqc --width 10 --tablepath ~/bufr/bufrtables t/substituted.bufr -t t/bt`;
@@ -29,14 +29,18 @@ is($output, $expected, 'testing bufrread.pl -a on message with associated values
 
 `$perl ./bufrread.pl --strict_checking 1 t/IOZX11_LFVW_060300.bufr -t t/bt > t/out 2> t/warn`;
 
-$output = read_file( 't/out' ) ;
+$output = read_file( 't/out' );
 unlink 't/out';
 $expected = read_file( 't/IOZX11_LFVW_060300.txt_1' );
 is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for output');
 
-$output = read_file( 't/warn' ) ;
+$output = read_file( 't/warn' );
 unlink 't/warn';
 $expected = read_file( 't/IOZX11_LFVW_060300.warn' );
+# Newer versions of perl might add '.' to end of warning/error message.
+# Remove that as well as actual line number (to ease future changes in bufrread.pl)
+$output =~ s/line \d+[.]?/line/g;
+$expected =~ s/line \d+[.]?/line/g;
 is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for warnings');
 
 `$perl ./bufrread.pl --strict_checking 2 t/IOZX11_LFVW_060300.bufr -t t/bt > t/out 2> t/err`;
@@ -49,6 +53,10 @@ is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for output');
 $output = read_file( 't/err' );
 unlink 't/err';
 $expected = read_file( 't/IOZX11_LFVW_060300.err' );
+# Newer versions of perl might add '.' to end of warning/error message.
+# Remove that as well as actual line number (to ease future changes in bufrread.pl)
+$output =~ s/line \d+[.]?/line/g;
+$expected =~ s/line \d+[.]?/line/g;
 is($output, $expected, 'testing bufrread.pl -s 2 on buoy message for error messages');
 
 `$perl ./bufrread.pl t/change_refval.bufr -t t/bt > t/out`;

@@ -104,8 +104,6 @@ C<--outfile> is used.
 Execute without arguments for Usage, with option --help for some
 additional info.
 
-See L</OPTIONS> for normal use.
-
 =head1 OPTIONS
 
 Bufr_reencode.pl will create BUFR message(s) printed to STDOUT from
@@ -141,14 +139,14 @@ Options (may be abbreviated, e.g. C<--h> or C<-h> for C<--help>):
                          BUFR_TABLES, or if this is not set: will use
                          DEFAULT_TABLE_PATH hard coded in source code.
    --help                Display Usage and explain the options used. Almost
-                         the same as consulting perldoc bufrencode.pl
+                         the same as consulting perldoc bufr_reencode.pl
 
 =head1 CAVEAT
 
 'Optional section present' in section 1 of BUFR message will always be
-set to 0, as reencode_message in Geo::BUFR currently does not provide
-encoding of section 2. A warning will be printed to STDERR if
-'Optional section present' originally was 1.
+set to 0, as reencode_message in Geo::BUFR does not provide encoding
+of section 2. A warning will be printed to STDERR if 'Optional section
+present' originally was 1.
 
 =head1 AUTHOR
 
