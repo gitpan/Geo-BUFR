@@ -221,6 +221,7 @@
  002160 WAVE LENGTH OF THE RADAR                                         CODE TABLE 2160            0            0   4 CODE TABLE 2160           0         2
  002163 HEIGHT ASSIGNMENT METHOD                                         CODE TABLE 2163            0            0   4 CODE TABLE 2163           0         2
  002164 TRACER CORRELATION METHOD                                        CODE TABLE 2164            0            0   3 CODE TABLE 2164           0         1
+ 002165 RADIANCE TYPE FLAG                                               FLAG TABLE 2165            0            0  15 FLAG TABLE 2165           0         5
  002166 RADIANCE TYPE                                                    CODE TABLE 2166            0            0   4 CODE TABLE 2166           0         2
  002167 RADIANCE COMPUTATIONAL METHOD                                    CODE TABLE 2167            0            0   4 CODE TABLE 2167           0         2
  002168 HYDROSTATIC PRESSURE OF LOWER END OF CABLE (THERMISTOR STRING)   PA                        -3            0  16 KPA                       0         5
@@ -327,6 +328,7 @@
  005042 CHANNEL NUMBER                                                   NUMERIC                    0            0   6 NUMERIC                   0         2
  005043 FIELD OF VIEW NUMBER                                             NUMERIC                    0            0   8 NUMERIC                   0         3
  005044 SATELLITE CYCLE NUMBER                                           NUMERIC                    0            0  11 NUMERIC                   0         4
+ 005045 FIELD OF REGARD NUMBER                                           NUMERIC                    0            0   8 NUMERIC                   0         3
  005052 CHANNEL NUMBER INCREMENT                                         NUMERIC                    0            0   5 NUMERIC                   0         2
  005053 FIELD OF VIEW NUMBER INCREMENT                                   NUMERIC                    0            0   5 NUMERIC                   0         2
  005060 Y ANGULAR POSITION FROM CENTRE OF GRAVITY                        DEGREE                     6     -8000000  24 DEGREE                    6         8
@@ -343,6 +345,7 @@
  006015 LONGITUDE DISPLACEMENT (HIGH ACCURACY)                           DEGREE                     5    -18000000  26 DEGREE                    5         8
  006016 LONGITUDE DISPLACEMENT (COARSE ACCURACY)                         DEGREE                     2       -18000  16 DEGREE                    2         5
  006021 DISTANCE                                                         M                         -1            0  13 M                        -1         4
+ 006029 WAVE NUMBER                                                      1/M                        1            0  22 M                         1         7
  006030 WAVE NUMBER (SPECTRAL)                                           RAD/M                      5            0  13 RAD/M                     5         4
  006031 COLUMN NUMBER                                                    NUMERIC                    0            0  12 NUMERIC                   0         4
  006033 PIXEL SIZE ON HORIZONTAL - 2                                     M                         -1            0  16 M                        -1         5
@@ -770,6 +773,8 @@
  014033 TOTAL SUNSHINE                                                   %                          0            0   9 %                         0         3
  014034 SUNSHINE OVER PERIOD SPECIFIED                                   MINUTE                     0            0  11 MINUTE                    0         4
  014042 BI-DIRECTIONAL REFLECTANCE                                       %                          0            0   7 %                         0         3
+ 014043 CHANNEL RADIANCE                                                 WM-2SR-1UM-1               4            0  23 W M-2 SR-1 UM-1           4         7
+ 014044 CHANNEL RADIANCE                                                 (W/m**2)*(1/sr)*cm         7      -100000  22 WM-2SR-1CM                7         7
  014045 CHANNEL RADIANCE                                                 (W/M**2)*(1/SR)*CM         0            0  11 WM-2SR-1CM-1              0         4
  014046 SCALED IASI RADIANCE                                             (W/M**2)*(1/SR)*(1/M)      0        -5000  16 (W/M**2)*(1/SR)*(1/M)     0         5
  014047 SCALED MEAN AVHRR RADIANCE                                       (W/M**2)*(1/SR)*(1/M)      0            0  31 (W/M**2)*(1/SR)*(1/M)     0        10
@@ -1464,6 +1469,15 @@
  033067 SBUV PROFILE OZONE QUALITY                                       CODE TABLE 33067           0            0   4 CODE TABLE 33067          0         2
  033070 TOTAL OZONE QUALITY                                              CODE TABLE 33070           0            0   4 CODE TABLE 33070          0         2
  033071 PROFILE OZONE QUALITY                                            CODE TABLE 33071           0            0   4 CODE TABLE 33071          0         2
+ 033075 SCAN LEVEL QUALITY FLAG                                          FLAG TABLE 33075           0            0  13 FLAG TABLE 33075          0         5
+ 033076 CALIBRATION QUALITY FLAG                                         FLAG TABLE 33076           0            0   9 FLAG TABLE 33076          0         3
+ 033077 FIELD OF VIEW QUALITY FLAG                                       FLAG TABLE 33077           0            0  19 FLAG TABLE 33077          0         7
+ 033078 GEOLOCATION QUALITY                                              CODE TABLE 33078           0            0   4 CODE TABLE 33078          0         2
+ 033079 GRANULE LEVEL QUALITY FLAGS                                      FLAG TABLE 33079           0            0  16 CODE TABLE 33079          0         6
+ 033080 SCAN LEVEL QUALITY FLAG                                          FLAG TABLE 33080           0            0  20 FLAG TABLE 33080          0         7
+ 033081 CHANNEL DATA QUALITY FLAG                                        FLAG TABLE 33080           0            0  12 FLAG TABLE 33080          0         4
+ 033082 GEOLOCATION QUALITY FLAGS                                        FLAGTABLE                  0            0  16 FLAG TABLE                0         6
+ 033083 RADIANCE DATA QUALITY FLAGS                                      FLAGTABLE                  0            0  16 FLAG TABLE                0         6
  033192 TEM1 CONFIDENCE                                                  %                          0            0   7
  033193 DATA QUALITY 3 BIT CODE                                          CODE TABLE 33193           0            0   3  
  033194 DATA QUALITY 2 BIT CODE                                          CODE TABLE 33194           0            0   2  

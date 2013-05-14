@@ -1,5 +1,9 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.23 2013-05-14
+- Supporting data description operators 207Y and 235000.
+- Several bugfixes related to bit maps.
+
 1.22 2013-04-03
 - Format of ECMWF tables version 15-17 changed slightly from previous
   versions, requiring some changes in processing.

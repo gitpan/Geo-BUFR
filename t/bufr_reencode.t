@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 8;
+use Test::More tests => 14;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -23,7 +23,7 @@ is($output, $expected, 'testing bufr_reencode.pl on 3 compressed BUFR SYNOP edit
 $output = read_file('t/out');
 $expected = read_file('t/substituted.bufr');
 unlink 't/out';
-is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with bitmaps');
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with substituted values');
 
 `$perl ./bufr_reencode.pl t/change_refval.txt -o t/out -t t/bt`;
 $output = read_file('t/out');
@@ -36,6 +36,18 @@ $output = read_file('t/out');
 $expected = read_file('t/change_refval_compressed.bufr');
 unlink 't/out';
 is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 203Y (compressed)');
+
+`$perl ./bufr_reencode.pl t/207003.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/207003.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 207Y');
+
+`$perl ./bufr_reencode.pl t/207003_compressed.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/207003_compressed.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 207Y (compressed)');
 
 `$perl ./bufr_reencode.pl t/208035.txt -w 35 -o t/out -t t/bt`;
 $output = read_file('t/out');
@@ -55,3 +67,26 @@ $expected = read_file('t/delayed_repetition_compressed.bufr');
 unlink 't/out';
 is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with 030011 (compressed)');
 
+`$perl ./bufr_reencode.pl t/multiple_qc.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/multiple_qc.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with triple 222000');
+
+`$perl ./bufr_reencode.pl t/multiple_qc_compressed.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/multiple_qc_compressed.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with triple 222000 (compressed)');
+
+`$perl ./bufr_reencode.pl t/multiple_qc_vary.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/multiple_qc_vary.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with triple 222000 and varying bitmaps');
+
+`$perl ./bufr_reencode.pl t/firstorderstat.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/firstorderstat.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on compressed BUFR file with first order statistics (224000)');

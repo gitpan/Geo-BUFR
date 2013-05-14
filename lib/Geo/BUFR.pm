@@ -28,21 +28,9 @@ Variables related to bit maps:
 $self->{BUILD_BITMAP}
 $self->{BITMAP_INDEX}
 $self->{NUM_BITMAPS}
+$self->{BACKWARD_DATA_REFERENCE}
 
 These are explained in sub new
-
-$self->{CURRENT_BITMAP}
-
-Reference to an array which contains the indexes of data values for
-which data is marked as present in 031031 in the current used bit map.
-
-$self->{LAST_BITMAP}
-
-Contains a copy of last $self->{CURRENT_BITMAP}. While
-$self->{CURRENT_BITMAP} is shifted every time a new bit mapped value
-is extracted, $self->{LAST_BITMAP} is kept intact, and can therefore
-be used to recreate $self->{CURRENT_BITMAP} when 237000 'Use defined
-data present bit-map' is encountered.
 
 $self->{BITMAP_OPERATORS}
 
@@ -52,13 +40,35 @@ operator being added when it is met in section 3 in message. Note that
 an operator may occur multiple times, which is why we have to use an
 array, not a hash.
 
+$self->{CURRENT_BITMAP}
+
+Reference to an array which contains the indexes of data values for
+which data is marked as present in 031031 in the current used bit map.
+E.g. [2,3,6] if bitmap = 1100110.
+
+$self->{BITMAP_START}
+
+Array containing for each bit map the index of the first element
+descriptor for which the bit map relates.
+
 $self->{BITMAPS}
 
 Reference to an array, one element added for each bit map operator in
-$self->{BITMAP_OPERATORS}, the element being a reference to an array
-containing consecutive pairs of indexes ($idesc, $bm_idesc), used to
-look up in @data and @desc arrays for the value/descriptor and
-corresponding bit mapped value/descriptor.
+$self->{BITMAP_OPERATORS} and each subset (although for compression we
+assume all subset have identical bitmaps and operate with subset 0
+only, i.e. $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[0] instead of
+...->[$isub]), the element being a reference to an array containing
+consecutive pairs of indexes ($idesc, $bm_idesc), used to look up in
+@data and @desc arrays for the value/descriptor and corresponding bit
+mapped value/descriptor.
+
+$self->{REUSE_BITMAP}
+
+Gets defined when 237000 is met, undefined if 237255 or 235000 is met.
+Originally for each subset (but defined for subset 0 only if
+compression) set to reference an array of the indexes of data values
+to which the last used bitmap relates (fetched from $self->{BITMAPS}),
+then shifted as the new element in $self->{BITMAPS} is built up.
 
 For operator 222000 ('Quality information follows') the bit mapped
 descriptor should be a 033-descriptor. For 22[3-5] the bit mapped
@@ -83,7 +93,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.22';
+our $VERSION = '1.23';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -178,11 +188,19 @@ sub new {
     $self->{NUM_BITMAPS} = 0;  # Will be incremented each time an
                                # operator descriptor which uses a bit
                                # map is encountered in section 3
+    $self->{BACKWARD_DATA_REFERENCE} = 1; # Number the first bitmap in
+                               # a possible sequence of bitmaps which
+                               # relate to the same scope of data
+                               # descriptors. Starts as 1 when (or
+                               # rather before) the first bitmap is
+                               # constructed, will then be reset to
+                               # the number of the next bitmap to be
+                               # constructed each time 235000 is met
     $self->{NUM_CHANGE_OPERATORS} = 0; # Will be incremented for
                                # each of the operators CHANGE_WIDTH,
                                # CHANGE_CCITTIA5_WIDTH, CHANGE_SCALE,
                                # CHANGE_REFERENCE_VALUE (actually
-                               # NEW_REFVAL_OF) and
+                               # NEW_REFVAL_OF), CHANGE_SRW and
                                # DIFFERENCE_STATISTICAL_VALUE in effect
 
     # If number of arguments is odd, first argument is expected to be
@@ -838,6 +856,9 @@ sub _read_C_table {
         } else {
             my ($tbl, $nval, $val, $nlines, $txt) = split /\s+/, $line, 5;
             $table = sprintf "%06d", $tbl;
+            # For tables listed 2 or more times, use last instance only.
+            # This prevents $txt to be duplicated in $C_table{$table}{$value} 
+            undef $C_table{$table} if defined $C_table{$table};
             $value = $val+0;
             next if !defined $txt || $txt eq 'NOT DEFINED' || $txt eq 'RESERVED';
             $C_table{$table}{$value} = $txt . "\n";
@@ -880,9 +901,9 @@ sub _read_D_table {
             $D_table{$alias} .= " $line";
         } else {
             $line =~ s/^\s+//;
-	    # In table version 17 a descriptor with more than 100
-	    # entries occurs, causing no space between alias and
-	    # number of entries (so split /\s+/ doesn't work)
+            # In table version 17 a descriptor with more than 100
+            # entries occurs, causing no space between alias and
+            # number of entries (so split /\s+/ doesn't work)
             my ($ali, $skip, $desc) = unpack('A6A4A6', $line);
             $alias = $ali;
             $D_table{$alias} = $desc;
@@ -1002,8 +1023,8 @@ sub _read_message {
     _croak "_read_message: Neither BUFR file nor BUFR text is given"
         unless $filehandle or $in_buffer;
 
-    # According to 2.3.1.1 in Manual On The GTS there are two
-    # possibilities for the starting line of a WMO bulletin
+    # According to 2.3.1.1 in part II of Manual On The GTS there are
+    # two possibilities for the starting line of a WMO bulletin
     my $ahl_regexp = qr{(?:ZCZC|\001\r\r\n) ?\d*\r\r\n(.+)\r\r};
     $self->{CURRENT_AHL} = undef;
 
@@ -1341,6 +1362,7 @@ sub _next_message {
 
     # Get the data descriptors and expand them
     my @unexpanded = _int2fxy(unpack 'n*', $self->{SEC3}[4]);
+    _croak "No data description in section 3" if !defined $unexpanded[0];
     $self->{DESCRIPTORS_UNEXPANDED} = join ' ', @unexpanded;
     $self->_spew(3, "Unexpanded data descriptors: %s", $self->{DESCRIPTORS_UNEXPANDED}) if $Spew;
 
@@ -1395,7 +1417,10 @@ sub next_observation {
         # The bit maps must be rebuilt for each message
         undef $self->{BITMAPS};
         undef $self->{BITMAP_OPERATORS};
+        undef $self->{BITMAP_START};
+        undef $self->{REUSE_BITMAP};
         $self->{NUM_BITMAPS} = 0;
+        $self->{BACKWARD_DATA_REFERENCE} = 1;
         # Some more tidying after decoding of previous message might
         # be necessary
         $self->{NUM_CHANGE_OPERATORS} = 0;
@@ -1404,6 +1429,7 @@ sub next_observation {
         undef $self->{CHANGE_SCALE};
         undef $self->{CHANGE_REFERENCE_VALUE};
         undef $self->{NEW_REFVAL_OF};
+        undef $self->{CHANGE_SRW};
         undef $self->{ADD_ASSOCIATED_FIELD};
         # If _next_message is croaking, what is returned from
         # next_observation is (mysteriously) what was returned last
@@ -1461,7 +1487,8 @@ sub dumpsections {
     # subset number 0 (and no section 4 to dump)
     if ($current_subset_number > 0) {
         $txt .= "\nSubset $current_subset_number\n";
-        $txt .= $bitmap ? $self->dumpsection4_with_bitmaps($data,$descriptors,$width)
+        $txt .= $bitmap ? $self->dumpsection4_with_bitmaps($data,$descriptors,
+                                 $current_subset_number,$width)
                         : $self->dumpsection4($data,$descriptors,$width);
     }
 
@@ -1563,6 +1590,7 @@ sub dumpsection3 {
     my $self = shift;
     _croak "BUFR object not properly initialized to call dumpsection3. "
         . "Did you forget to call next_observation()?" unless $self->{SEC3_STREAM};
+    $self->{DESCRIPTORS_UNEXPANDED} ||= '';
 
     my $txt = <<"EOF";
 
@@ -1610,7 +1638,7 @@ sub dumpsection4 {
             $txt .= sprintf "%6d  %06d  %${width}.${width}s  %s %06d\n",
                 ++$line_no, $id, $value, 'NEW REFERENCE VALUE FOR', $id - 900000;
             next ID;
-        } elsif ($id == 31031) { # This is the only data descriptor 
+        } elsif ($id == 31031) { # This is the only data descriptor
                                  # where all bits set to one should
                                  # not be rendered as missing value
                                  # (for replication/repetition factors in
@@ -1663,6 +1691,7 @@ my %OPERATOR_NAME_B =
     ( 201000 => 'CANCEL CHANGE DATA WIDTH',
       202000 => 'CANCEL CHANGE SCALE',
       203000 => 'CANCEL CHANGE REFERENCE VALUES',
+      207000 => 'CANCEL INCREASE SCALE, REFERENCE VALUE AND DATA WIDTH',
       203255 => 'STOP CHANGING REFERENCE VALUES',
       223255 => 'SUBSTITUTED VALUES MARKER OPERATOR',
       224255 => 'FIRST ORDER STATISTICAL VALUES MARKER OPERATOR',
@@ -1679,6 +1708,7 @@ my %OPERATOR_NAME_C =
       # This one is displayed, treated specially (and named CHARACTER INFORMATION)
 ##      205 => 'SIGNIFY CHARACTER',
       206 => 'SIGNIFY DATAWIDTH FOR THE IMMEDIATELY FOLLOWING LOCAL DESCRIPTOR',
+      207 => 'INCREASE SCALE, REFERENCE VALUE AND DATA WIDTH',
       221 => 'DATA NOT PRESENT',
  );
 sub _get_operator_name {
@@ -1700,17 +1730,20 @@ sub _get_operator_name {
 }
 
 ## Display bit mapped values on same line as the original value. This
-## offer a much shorter and easier to read dump of section 4 when
-## bit maps has been used (i.e. for 222000 quality information, 223000
-## substituted values, 224000 first order statistics, 225000 difference
-## statistics). '******' is displayed if data is not present in bit map
-## (bit set to 1 in 031031), 'missing' is displayed if value is missing.
-## But note that we miss other descriptors like 001031 and 001032 if
-## these comes after 222000 etc with the current implementation.
+## offer a much shorter and easier to read dump of section 4 when bit
+## maps has been used (i.e. for 222000 quality information, 223000
+## substituted values, 224000 first order statistics, 225000
+## difference statistics). '*******' is displayed if data is not
+## present in bit map (bit set to 1 in 031031 or data not covered by
+## the 031031 descriptors), 'missing' is displayed if value is
+## missing.  But note that we miss other descriptors like 001031 and
+## 001032 if these come after 222000 etc with the current
+## implementation.
 sub dumpsection4_with_bitmaps {
     my $self = shift;
     my $data = shift;
     my $descriptors = shift;
+    my $isub = shift;
     my $width = shift || 15;    # Optional argument
 
     # If no bit maps call the ordinary dumpsection4
@@ -1728,13 +1761,17 @@ sub dumpsection4_with_bitmaps {
     my @bitmap_array; # Will contain for each bit map a reference to a hash with
                       # key: index (in data and descriptor arrays) for data value
                       # value: index for bit mapped value
+
+    # For compressed data all subsets use same bit map (we assume)
+    $isub = 0 if $self->{COMPRESSED_DATA};
+
     my $txt = "\n";
     my $space = ' ';
     my $line = $space x (17 + $width);
     foreach my $bitmap_num (0..$#bitmap_desc) {
-        $line .= " $bitmap_desc[$bitmap_num]";
+        $line .= "  $bitmap_desc[$bitmap_num]";
         # Convert the sequence of ($data_idesc,$bitmapped_idesc) pairs into a hash
-        my %hash = @{ $self->{BITMAPS}->[$bitmap_num + 1] };
+        my %hash = @{ $self->{BITMAPS}->[$bitmap_num + 1]->[$isub] };
         $bitmap_array[$bitmap_num] = \%hash;
     }
     # First make a line showing the operator descriptors using bit maps
@@ -1762,8 +1799,9 @@ sub dumpsection4_with_bitmaps {
         $line = sprintf "%6d  %06d  %${width}.${width}s ",
             $idx+1, $id, $value;
 
-        # Then get the corresponding bit mapped values, using '******'
+        # Then get the corresponding bit mapped values, using '*******'
         # if 'data not present' in bit map
+        my $max_len = 7;
         foreach my $bitmap_num (0..$#bitmap_desc) {
             my $val;
             if ($bitmap_array[$bitmap_num]->{$idx}) {
@@ -1771,10 +1809,14 @@ sub dumpsection4_with_bitmaps {
                 my $bitmapped_idesc = $bitmap_array[$bitmap_num]->{$idx};
                 $val = defined $data->[$bitmapped_idesc]
                     ? $data->[$bitmapped_idesc] : 'missing';
+                $max_len = length($val) if length($val) > $max_len;
             } else {
-                $val = '******';
+                $val = '*******';
             }
-            $line .= sprintf " %6.6s", $val;
+            # If $max_len has been increased, this might not always
+            # print very pretty, but at least there is no truncation
+            # of digits in value
+            $line .= sprintf " %${max_len}.${max_len}s", $val;
         }
         # Code or flag table number equals $id, so no need to display this in [unit]
         my $short_unit = $unit;
@@ -1889,7 +1931,6 @@ sub _expand_descriptors {
             if $descriptor !~ /^\d{6}$/;
         my $f = int substr($descriptor, 0, 1);
         if ($f == 1) {
-            # Simple replication
             my $x = substr $descriptor, 1, 2; # Replicate next $x descriptors
             my $y = substr $descriptor, 3;    # Number of replications
             if ($y > 0) {
@@ -1924,14 +1965,13 @@ sub _expand_descriptors {
                 $di += 1 + $x; # NOTE: 1 is added to $di on next iteration
             }
             next;
-        }
-        if ($f == 3) {
+        } elsif ($f == 3) {
             _croak "No data descriptor $descriptor in BUFR table D"
                 if not exists $D_table->{$descriptor};
             # Expand recursively, if necessary
             push @expanded,
                 _expand_descriptors($D_table, split /\s/, $D_table->{$descriptor});
-        } else {
+        } else { # f=0,2
             push @expanded, $descriptor;
         }
     }
@@ -2164,6 +2204,15 @@ sub _decode_bitstream {
     # '')
   S_LOOP: foreach my $isub (1..$self->{NUM_SUBSETS}) {
         $self->_spew(2, "Decoding subset number %d", $isub) if $Spew;
+
+        # Bit maps might vary from subset to subset, so must be rebuilt
+        undef $self->{BITMAP_OPERATORS};
+        undef $self->{BITMAP_START};
+        undef $self->{REUSE_BITMAP};
+        $self->{NUM_BITMAPS} = 0;
+        $self->{BACKWARD_DATA_REFERENCE} = 1;
+        $self->{NUM_CHANGE_OPERATORS} = 0;
+
         my @desc = split /\s/, $self->{DESCRIPTORS_EXPANDED};
 
         # Note: @desc as well as $idesc may be changed during this loop,
@@ -2236,22 +2285,36 @@ sub _decode_bitstream {
 
             } elsif ($f == 2) {
                 my $flow;
-                my $new_idesc;
-                ($pos, $flow, $new_idesc, @operators)
-                    = $self->_apply_operator_descriptor($id, $x, $y, $pos,
+                my $bm_idesc;
+                ($pos, $flow, $bm_idesc, @operators)
+                    = $self->_apply_operator_descriptor($id, $x, $y, $pos, $isub,
                                                         $desc[$idesc + 1], @operators);
                 if ($flow eq 'redo_bitmap') {
                     # Data value is associated with the descriptor
                     # defined by bit map. Remember original and new
                     # index in descriptor array for the bit mapped
-                    # values
-                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-                        $new_idesc, $idesc;
+                    # values ('dr' = data reference)
+                    my $dr_idesc;
+                    if (!defined $bm_idesc) {
+                        $dr_idesc = shift @{$self->{REUSE_BITMAP}->[$isub]};
+                    } elsif (!$Show_all_operators) {
+                        $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                            + $bm_idesc;
+                    } else {
+                        $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}];
+                        # Skip operator descriptors
+                        while ($bm_idesc-- > 0) {
+                            $dr_idesc++;
+                            $dr_idesc++ while ($desc[$dr_idesc] >= 200000);
+                        }
+                    }
+                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[$isub] },
+                         $dr_idesc, $idesc;
                     if ($Show_all_operators) {
                         push @{$subset_desc[$isub]}, $id;
                         push @{$subset_data[$isub]}, '';
                     }
-                    $desc[$idesc] = $desc[$new_idesc];
+                    $desc[$idesc] = $desc[$dr_idesc];
                     redo D_LOOP;
                 } elsif ($flow eq 'signify_character') {
                     push @{$subset_desc[$isub]}, $id;
@@ -2331,13 +2394,22 @@ sub _decode_bitstream {
             # index ($idesc) in the descriptor array for the bit
             # mapped values
             if (substr($id,0,3) eq '033'
-                and defined $self->{BITMAP_OPERATORS}
-                and $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
-                my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
-                _croak "$id: Not enough quality values provided"
-                    if not defined $data_idesc;
-                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-                    $data_idesc, $idesc;
+                && defined $self->{BITMAP_OPERATORS}
+                && $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
+                if (defined $self->{REUSE_BITMAP}) {
+                    my $data_idesc = shift @{ $self->{REUSE_BITMAP}->[$isub] };
+                    _croak "$id: Not enough quality values provided"
+                        if not defined $data_idesc;
+                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[$isub] },
+                         $data_idesc, $idesc;
+                } else {
+                    my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
+                    _croak "$id: Not enough quality values provided"
+                        if not defined $data_idesc;
+                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[$isub] },
+                         $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                             + $data_idesc, $idesc;
+                }
             }
 
             # Find the relevant entry in BUFR table B
@@ -2348,10 +2420,18 @@ sub _decode_bitstream {
 
             # Override Table B values if Data Description Operators are in effect
             if ($self->{NUM_CHANGE_OPERATORS} > 0) {
-                $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-                $width = $self->{CHANGE_CCITTIA5_WIDTH}
-                    if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
-                $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                if ($unit ne 'CCITTIA5' && $unit !~ /^(CODE|FLAG)/) {
+                    if (defined $self->{CHANGE_SRW}) {
+                        $scale += $self->{CHANGE_SRW};
+                        $width += int((10*$self->{CHANGE_SRW}+2)/3);
+                        $refval *= 10*$self->{CHANGE_SRW};
+                    } else {
+                        $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                        $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+                    }
+                } elsif ($unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH}) {
+                    $width = $self->{CHANGE_CCITTIA5_WIDTH}
+                }
                 # To prevent autovivification (see perlodc -f exists) we
                 # need this laborious test for defined
                 $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
@@ -2409,14 +2489,33 @@ sub _decode_bitstream {
                 # bitmap = 1100110 => (2,3,6) is stored in $self->{CURRENT_BITMAP}
                 if (defined $value) {
                     push @{$self->{CURRENT_BITMAP}}, $self->{BITMAP_INDEX};
-                    push @{$self->{LAST_BITMAP}}, $self->{BITMAP_INDEX};
                 }
                 $self->{BITMAP_INDEX}++;
-
+                if ($self->{BACKWARD_DATA_REFERENCE} == $self->{NUM_BITMAPS}) {
+                    my $numb = $self->{NUM_BITMAPS};
+                    if (!defined $self->{BITMAP_START}[$numb]) {
+                        # Look up the element descriptor immediately
+                        # preceding the bitmap operator
+                        my $i = $idesc;
+                        $i-- while ($desc[$i] ne $self->{BITMAP_OPERATORS}->[-1]
+                                    && $i >=0);
+                        $i-- while ($desc[$i] > 100000 && $i >=0);
+                        _croak "No element descriptor preceding bitmap" if $i < 0;
+                        $self->{BITMAP_START}[$numb] = $i;
+                    } else {
+                        $self->{BITMAP_START}[$numb]--;
+                        _croak "Bitmap too big"
+                            if $self->{BITMAP_START}[$numb] < 0;
+                    }
+                }
             } elsif ($self->{BUILD_BITMAP} and $self->{BITMAP_INDEX} > 0) {
                 # We have finished building the bit map
                 $self->{BUILD_BITMAP} = 0;
                 $self->{BITMAP_INDEX} = 0;
+                if ($self->{BACKWARD_DATA_REFERENCE} != $self->{NUM_BITMAPS}) {
+                    $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                        = $self->{BITMAP_START}[$self->{BACKWARD_DATA_REFERENCE}];
+                }
             }
         } # End D_LOOP
     } # END S_LOOP
@@ -2507,6 +2606,7 @@ sub _decompress_bitstream {
             }
             # Include the delayed replication in descriptor and data list
             push @desc_exp, $_;
+            splice @desc, $idesc++, 0, $_;
             foreach my $isub (1..$nsubsets) {
                 push @{$subset_data[$isub]}, $factor;
             }
@@ -2541,22 +2641,36 @@ sub _decompress_bitstream {
             my $flow;
             my $bm_idesc;
             ($pos, $flow, $bm_idesc, @operators)
-                = $self->_apply_operator_descriptor($id, $x, $y, $pos,
+                = $self->_apply_operator_descriptor($id, $x, $y, $pos, 0,
                                                     $desc[$idesc + 1], @operators);
             if ($flow eq 'redo_bitmap') {
                 # Data value is associated with the descriptor
                 # defined by bit map. Remember original and new
                 # index in descriptor array for the bit mapped
-                # values
-                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-                    $bm_idesc, $idesc;
+                # values ('dr' = data reference)
+                my $dr_idesc;
+                if (!defined $bm_idesc) {
+                    $dr_idesc = shift @{ $self->{REUSE_BITMAP}->[0] };
+                } elsif (!$Show_all_operators) {
+                    $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                        + $bm_idesc;
+                } else {
+                    $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}];
+                    # Skip operator descriptors
+                    while ($bm_idesc-- > 0) {
+                        $dr_idesc++;
+                        $dr_idesc++ while ($desc[$dr_idesc] >= 200000);
+                    }
+                }
+                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[0] },
+                     $dr_idesc, $idesc;
                 if ($Show_all_operators) {
                     push @desc_exp, $id;
                     foreach my $isub (1..$nsubsets) {
                         push @{$subset_data[$isub]}, '';
                     }
                 }
-                $desc[$idesc] = $desc[$bm_idesc];
+                $desc[$idesc] = $desc[$dr_idesc];
                 redo D_LOOP;
             } elsif ($flow eq 'signify_character') {
                 push @desc_exp, $id;
@@ -2632,7 +2746,7 @@ sub _decompress_bitstream {
         push @desc_exp, $id;
 
         $pos = $self->_extract_compressed_value($id, $idesc, $pos, $bitstream,
-                                                $nsubsets, \@subset_data);
+                                                $nsubsets, \@subset_data, \@desc);
         if ($repeat_X) {
             # Delayed repetition factor (030011/030012) is in
             # effect, so descriptors and data are to be repeated
@@ -2672,7 +2786,7 @@ sub _decompress_bitstream {
 ## subsets). Extraction starts at position $pos in $bitstream.
 sub _extract_compressed_value {
     my $self = shift;
-    my ($id, $idesc, $pos, $bitstream, $nsubsets, $subset_data_ref) = @_;
+    my ($id, $idesc, $pos, $bitstream, $nsubsets, $subset_data_ref, $desc_ref) = @_;
     my $B_table = $self->{B_TABLE};
 
     # For quality information, if this relates to a bit map we
@@ -2683,11 +2797,20 @@ sub _extract_compressed_value {
     if (substr($id,0,3) eq '033'
         && defined $self->{BITMAP_OPERATORS}
         && $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
-        my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
-        _croak "$id: Not enough quality values provided"
-            if not defined $data_idesc;
-        push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-            $data_idesc, $idesc;
+        if (defined $self->{REUSE_BITMAP}) {
+            my $data_idesc = shift @{ $self->{REUSE_BITMAP}->[0] };
+            _croak "$id: Not enough quality values provided"
+                if not defined $data_idesc;
+            push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[0] },
+                 $data_idesc, $idesc;
+        } else {
+            my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
+            _croak "$id: Not enough quality values provided"
+                if not defined $data_idesc;
+            push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[0] },
+                 $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                     + $data_idesc, $idesc;
+        }
     }
 
     # Find the relevant entry in BUFR table B
@@ -2711,10 +2834,18 @@ sub _extract_compressed_value {
 
         # Override Table B values if Data Description Operators are in effect
         if ($self->{NUM_CHANGE_OPERATORS} > 0) {
-            $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-            $width = $self->{CHANGE_CCITTIA5_WIDTH}
-                if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
-            $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+            if ($unit ne 'CCITTIA5' && $unit !~ /^(CODE|FLAG)/) {
+                if (defined $self->{CHANGE_SRW}) {
+                    $scale += $self->{CHANGE_SRW};
+                    $width += int((10*$self->{CHANGE_SRW}+2)/3);
+                    $refval *= 10*$self->{CHANGE_SRW};
+                } else {
+                    $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                    $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+                }
+            } elsif ($unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH}) {
+                $width = $self->{CHANGE_CCITTIA5_WIDTH}
+            }
             $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
             # Difference statistical values use different width and reference value
             if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
@@ -2799,10 +2930,10 @@ sub _extract_compressed_value {
             my $incr_values;
             foreach my $isub (1..$nsubsets) {
                 my $value = bitstream2dec($bitstream, $pos, $deltabits);
-		_complain("value " . ($value + $minval) . " in subset $isub for "
-			  . "$id too big to be encoded without compression")
-		    if ($Strict_checking && defined $value &&
-			($value + $minval) > 2**$width);
+                _complain("value " . ($value + $minval) . " in subset $isub for "
+                          . "$id too big to be encoded without compression")
+                    if ($Strict_checking && defined $value &&
+                        ($value + $minval) > 2**$width);
                 $incr_values .= defined $value ? "$value," : ',' if $Spew;
                 $value = ($value + $minval) * $scale_factor if defined $value;
                 # All bits set to 1 for associated field is NOT
@@ -2843,14 +2974,39 @@ sub _extract_compressed_value {
             # 'present', 1 (undef value) is 'not present'
             if (defined $minval) {
                 push @{$self->{CURRENT_BITMAP}}, $self->{BITMAP_INDEX};
-                push @{$self->{LAST_BITMAP}}, $self->{BITMAP_INDEX};
             }
             $self->{BITMAP_INDEX}++;
-
+            if ($self->{BACKWARD_DATA_REFERENCE} == $self->{NUM_BITMAPS}) {
+                my $numb = $self->{NUM_BITMAPS};
+                if (!defined $self->{BITMAP_START}[$numb]) {
+                    # Look up the element descriptor immediately
+                    # preceding the bitmap operator
+                    my $i = $idesc;
+                    $i-- while ($desc_ref->[$i] ne $self->{BITMAP_OPERATORS}->[-1]
+                                && $i >=0);
+                    $i-- while ($desc_ref->[$i] > 100000 && $i >=0);
+                    _croak "No element descriptor preceding bitmap" if $i < 0;
+                    $self->{BITMAP_START}[$numb] = $i;
+                } else {
+                    if ($Show_all_operators) {
+                        my $i = $self->{BITMAP_START}[$numb] - 1;
+                        $i-- while ($desc_ref->[$i] > 100000 && $i >=0);
+                        $self->{BITMAP_START}[$numb] = $i;
+                    } else {
+                        $self->{BITMAP_START}[$numb]--;
+                    }
+                    _croak "Bitmap too big"
+                        if $self->{BITMAP_START}[$numb] < 0;
+                }
+            }
         } elsif ($self->{BUILD_BITMAP} and $self->{BITMAP_INDEX} > 0) {
             # We have finished building the bit map
             $self->{BUILD_BITMAP} = 0;
             $self->{BITMAP_INDEX} = 0;
+            if ($self->{BACKWARD_DATA_REFERENCE} != $self->{NUM_BITMAPS}) {
+                $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                    = $self->{BITMAP_START}[$self->{BACKWARD_DATA_REFERENCE}];
+            }
         }
         $self->_spew(3, "  %s", join ' ',
                      map { defined($subset_data_ref->[$_][-1]) ?
@@ -2884,9 +3040,11 @@ sub reencode_message {
         undef $self->{CHANGE_SCALE};
         undef $self->{CHANGE_REFERENCE_VALUE};
         undef $self->{NEW_REFVAL_OF};
+        undef $self->{CHANGE_SRW};
         undef $self->{ADD_ASSOCIATED_FIELD};
         undef $self->{BITMAPS};
         undef $self->{BITMAP_OPERATORS};
+        undef $self->{REUSE_BITMAP};
         $self->{NUM_BITMAPS} = 0;
         # $self->{LOCAL_USE} is always set for BUFR edition < 4 in _encode_sec1
         delete $self->{LOCAL_USE};
@@ -3363,7 +3521,7 @@ sub _encode_nil_sec4 {
             my $flow;
             my $bm_idesc;
             ($pos, $flow, $bm_idesc, @operators)
-                = $self->_apply_operator_descriptor($id, $x, $y, $pos,
+                = $self->_apply_operator_descriptor($id, $x, $y, $pos, 0,
                                                     $next_id, @operators);
             next D_LOOP if $flow eq 'next';
         }
@@ -3378,10 +3536,18 @@ sub _encode_nil_sec4 {
 
         # Override Table B values if Data Description Operators are in effect
         if ($self->{NUM_CHANGE_OPERATORS} > 0) {
-            $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-            $width = $self->{CHANGE_CCITTIA5_WIDTH}
-                if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
-            $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+            if ($unit ne 'CCITTIA5' && $unit !~ /^(CODE|FLAG)/) {
+                if (defined $self->{CHANGE_SRW}) {
+                    $scale += $self->{CHANGE_SRW};
+                    $width += int((10*$self->{CHANGE_SRW}+2)/3);
+                    $refval *= 10*$self->{CHANGE_SRW};
+                } else {
+                    $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                    $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+                }
+            } elsif ($unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH}) {
+                $width = $self->{CHANGE_CCITTIA5_WIDTH}
+            }
             $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
         }
         _croak "$id Data width <= 0" if $width <= 0;
@@ -3453,6 +3619,15 @@ sub _encode_bitstream {
 
   S_LOOP: foreach my $isub (1..$nsubsets) {
         $self->_spew(2, "Encoding subset number %d", $isub) if $Spew;
+
+        # Bit maps might vary from subset to subset, so must be rebuilt
+        undef $self->{BITMAP_OPERATORS};
+        undef $self->{BITMAP_START};
+        undef $self->{REUSE_BITMAP};
+        $self->{NUM_BITMAPS} = 0;
+        $self->{BACKWARD_DATA_REFERENCE} = 1;
+        $self->{NUM_CHANGE_OPERATORS} = 0;
+
         # The data values to use for this subset
         my $data_ref = $data_refs->[$isub];
         # The descriptors from expanding section 3
@@ -3517,18 +3692,32 @@ sub _encode_bitstream {
 
             } elsif ($f == 2) {
                 my $flow;
-                my $new_idesc;
-                ($pos, $flow, $new_idesc, @operators)
-                    = $self->_apply_operator_descriptor($id, $x, $y, $pos,
+                my $bm_idesc;
+                ($pos, $flow, $bm_idesc, @operators)
+                    = $self->_apply_operator_descriptor($id, $x, $y, $pos, $isub,
                                                         $desc[$idesc + 1], @operators);
                 if ($flow eq 'redo_bitmap') {
                     # Data value is associated with the descriptor
                     # defined by bit map. Remember original and new
                     # index in descriptor array for the bit mapped
-                    # values
-                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-                        $new_idesc, $idesc;
-                    $desc[$idesc] = $desc[$new_idesc];
+                    # values ('dr' = data reference)
+                    my $dr_idesc;
+                    if (!defined $bm_idesc) {
+                        $dr_idesc = shift @{ $self->{REUSE_BITMAP}->[$isub]};
+                    } elsif (!$Show_all_operators) {
+                        $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                            + $bm_idesc;
+                    } else {
+                        $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}];
+                        # Skip operator descriptors
+                        while ($bm_idesc-- > 0) {
+                            $dr_idesc++;
+                            $dr_idesc++ while ($desc[$dr_idesc] >= 200000);
+                        }
+                    }
+                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[$isub] },
+                         $dr_idesc, $idesc;
+                    $desc[$idesc] = $desc[$dr_idesc];
                     redo D_LOOP;
                 } elsif ($flow eq 'signify_character') {
                     _croak "Descriptor no $idesc is $desc_ref->[$idesc], expected $id"
@@ -3603,11 +3792,20 @@ sub _encode_bitstream {
             if (substr($id,0,3) eq '033'
                 && defined $self->{BITMAP_OPERATORS}
                 && $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
-                my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
-                _croak "$id: Not enough quality values provided"
-                    unless defined $data_idesc;
-                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-                    $data_idesc, $idesc;
+                if (defined $self->{REUSE_BITMAP}) {
+                    my $data_idesc = shift @{ $self->{REUSE_BITMAP}->[$isub] };
+                    _croak "$id: Not enough quality values provided"
+                        if not defined $data_idesc;
+                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[$isub] },
+                         $data_idesc, $idesc;
+                } else {
+                    my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
+                    _croak "$id: Not enough quality values provided"
+                        if not defined $data_idesc;
+                    push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[$isub] },
+                         $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                             + $data_idesc, $idesc;
+                }
             }
 
             my $value = $data_ref->[$idesc];
@@ -3619,14 +3817,33 @@ sub _encode_bitstream {
                 # bitmap = 1100110 => (2,3,6) is stored in $self->{CURRENT_BITMAP}
                 if (defined $value and $value == 0) {
                     push @{$self->{CURRENT_BITMAP}}, $self->{BITMAP_INDEX};
-                    push @{$self->{LAST_BITMAP}}, $self->{BITMAP_INDEX};
                 }
                 $self->{BITMAP_INDEX}++;
-
+                if ($self->{BACKWARD_DATA_REFERENCE} == $self->{NUM_BITMAPS}) {
+                    my $numb = $self->{NUM_BITMAPS};
+                    if (!defined $self->{BITMAP_START}[$numb]) {
+                        # Look up the element descriptor immediately
+                        # preceding the bitmap operator
+                        my $i = $idesc;
+                        $i-- while ($desc[$i] ne $self->{BITMAP_OPERATORS}->[-1]
+                                    && $i >=0);
+                        $i-- while ($desc[$i] > 100000 && $i >=0);
+                        _croak "No element descriptor preceding bitmap" if $i < 0;
+                        $self->{BITMAP_START}[$numb] = $i;
+                    } else {
+                        $self->{BITMAP_START}[$numb]--;
+                        _croak "Bitmap too big"
+                            if $self->{BITMAP_START}[$numb] < 0;
+                    }
+                }
             } elsif ($self->{BUILD_BITMAP} and $self->{BITMAP_INDEX} > 0) {
                 # We have finished building the bit map
                 $self->{BUILD_BITMAP} = 0;
                 $self->{BITMAP_INDEX} = 0;
+                if ($self->{BACKWARD_DATA_REFERENCE} != $self->{NUM_BITMAPS}) {
+                    $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                        = $self->{BITMAP_START}[$self->{BACKWARD_DATA_REFERENCE}];
+                }
             }
 
             _croak "Not enough descriptors provided (expected no $idesc to be $id)"
@@ -3648,13 +3865,21 @@ sub _encode_bitstream {
     # Override Table B values if Data Description Operators are in
     # effect (except for associated fields)
     if ($self->{NUM_CHANGE_OPERATORS} > 0 && $id != 999999) {
-        $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-        $width = $self->{CHANGE_CCITTIA5_WIDTH}
-            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+        if ($unit ne 'CCITTIA5' && $unit !~ /^(CODE|FLAG)/) {
+            if (defined $self->{CHANGE_SRW}) {
+                $scale += $self->{CHANGE_SRW};
+                $width += int((10*$self->{CHANGE_SRW}+2)/3);
+                $refval *= 10*$self->{CHANGE_SRW};
+            } else {
+                $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+            }
+        } elsif ($unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH}) {
+            $width = $self->{CHANGE_CCITTIA5_WIDTH}
+        }
         _croak "$id Data width is $width which is <= 0" if $width <= 0;
-        $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
-            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
-                && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
+        $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
+        && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
         # Difference statistical values use different width and reference value
         if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
             $width += 1;
@@ -3759,13 +3984,21 @@ sub _encode_value {
     # Override Table B values if Data Description Operators are in
     # effect (except for associated fields)
     if ($self->{NUM_CHANGE_OPERATORS} > 0 && $id != 999999) {
-        $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-        $width = $self->{CHANGE_CCITTIA5_WIDTH}
-            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+        if ($unit ne 'CCITTIA5' && $unit !~ /^(CODE|FLAG)/) {
+            if (defined $self->{CHANGE_SRW}) {
+                $scale += $self->{CHANGE_SRW};
+                $width += int((10*$self->{CHANGE_SRW}+2)/3);
+                $refval *= 10*$self->{CHANGE_SRW};
+            } else {
+                $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+            }
+        } elsif ($unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH}) {
+            $width = $self->{CHANGE_CCITTIA5_WIDTH}
+        }
         _croak "$id Data width is $width which is <= 0" if $width <= 0;
-        $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
-            $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
-                && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
+        $refval = $self->{NEW_REFVAL_OF}{$id}{$isub} if defined $self->{NEW_REFVAL_OF}{$id}
+        && defined $self->{NEW_REFVAL_OF}{$id}{$isub};
         # Difference statistical values use different width and reference value
         if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
             $width += 1;
@@ -3860,11 +4093,19 @@ sub _encode_compressed_value {
     # Override Table B values if Data Description Operators are in
     # effect (except for associated fields)
     if ($self->{NUM_CHANGE_OPERATORS} > 0 && $id != 999999) {
-        $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
-        $width = $self->{CHANGE_CCITTIA5_WIDTH}
-            if $unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH};
+        if ($unit ne 'CCITTIA5' && $unit !~ /^(CODE|FLAG)/) {
+            if (defined $self->{CHANGE_SRW}) {
+                $scale += $self->{CHANGE_SRW};
+                $width += int((10*$self->{CHANGE_SRW}+2)/3);
+                $refval *= 10*$self->{CHANGE_SRW};
+            } else {
+                $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
+                $width += $self->{CHANGE_WIDTH} if defined $self->{CHANGE_WIDTH};
+            }
+        } elsif ($unit eq 'CCITTIA5' && defined $self->{CHANGE_CCITTIA5_WIDTH}) {
+            $width = $self->{CHANGE_CCITTIA5_WIDTH}
+        }
         _croak "$id Data width <= 0" if $width <= 0;
-        $scale += $self->{CHANGE_SCALE} if defined $self->{CHANGE_SCALE};
         $refval = $self->{NEW_REFVAL_OF}{$id} if defined $self->{NEW_REFVAL_OF}{$id};
         # Difference statistical values use different width and reference value
         if ($self->{DIFFERENCE_STATISTICAL_VALUE}) {
@@ -4008,9 +4249,9 @@ sub _encode_compressed_value {
                          if $Spew;
             foreach my $value (@inc_values) {
                 if (defined $value) {
-		    _complain("value " . ($value + $min_value) . " for $id too big"
-			      . " to be encoded without compression")
-			if ($Strict_checking && ($value + $min_value) > 2**$width -1);
+                    _complain("value " . ($value + $min_value) . " for $id too big"
+                              . " to be encoded without compression")
+                        if ($Strict_checking && ($value + $min_value) > 2**$width -1);
                     dec2bitstream($value, $bitstream, $pos, $deltabits);
                 } else {
                     # Missing value is encoded as 1 bits, but
@@ -4123,18 +4364,32 @@ sub _encode_compressed_bitstream {
 
         } elsif ($f == 2) {
             my $flow;
-            my $new_idesc;
-            ($pos, $flow, $new_idesc, @operators)
-                = $self->_apply_operator_descriptor($id, $x, $y, $pos,
+            my $bm_idesc;
+            ($pos, $flow, $bm_idesc, @operators)
+                = $self->_apply_operator_descriptor($id, $x, $y, $pos, 0,
                                                     $desc[$idesc + 1], @operators);
             if ($flow eq 'redo_bitmap') {
                 # Data value is associated with the descriptor
                 # defined by bit map. Remember original and new
                 # index in descriptor array for the bit mapped
-                # values
-                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-                    $new_idesc, $idesc;
-                $desc[$idesc] = $desc[$new_idesc];
+                # values ('dr' = data reference)
+                my $dr_idesc;
+                if (!defined $bm_idesc) {
+                    $dr_idesc = shift @{ $self->{REUSE_BITMAP}->[0] };
+                } elsif (!$Show_all_operators) {
+                    $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                        + $bm_idesc;
+                } else {
+                    $dr_idesc = $self->{BITMAP_START}[$self->{NUM_BITMAPS}];
+                    # Skip operator descriptors
+                    while ($bm_idesc-- > 0) {
+                        $dr_idesc++;
+                        $dr_idesc++ while ($desc[$dr_idesc] >= 200000);
+                    }
+                }
+                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[0] },
+                     $dr_idesc, $idesc;
+                $desc[$idesc] = $desc[$dr_idesc];
                 redo D_LOOP;
             } elsif ($flow eq 'signify_character') {
                 _croak "Descriptor no $idesc is $desc_ref->[$idesc], expected $id"
@@ -4223,11 +4478,20 @@ sub _encode_compressed_bitstream {
         if (substr($id,0,3) eq '033'
             && defined $self->{BITMAP_OPERATORS}
             && $self->{BITMAP_OPERATORS}->[-1] eq '222000') {
-            my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
-            _croak "$id: Not enough quality values provided"
-                unless defined $data_idesc;
-            push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}] },
-                $data_idesc, $idesc;
+            if (defined $self->{REUSE_BITMAP}) {
+                my $data_idesc = shift @{ $self->{REUSE_BITMAP}->[0] };
+                _croak "$id: Not enough quality values provided"
+                    if not defined $data_idesc;
+                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[0] },
+                     $data_idesc, $idesc;
+            } else {
+                my $data_idesc = shift @{ $self->{CURRENT_BITMAP} };
+                _croak "$id: Not enough quality values provided"
+                    if not defined $data_idesc;
+                push @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}]->[0] },
+                     $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                         + $data_idesc, $idesc;
+            }
         }
 
         if ($id eq '031031' and $self->{BUILD_BITMAP}) {
@@ -4237,16 +4501,35 @@ sub _encode_compressed_bitstream {
             # bitmap = 1100110 => (2,3,6) is stored in $self->{CURRENT_BITMAP}
 
             # NB: bit map might vary betwen subsets!!!!????
-            if (defined $data_refs->[1][$idesc]) {
+            if ($data_refs->[1][$idesc] == 0) {
                 push @{$self->{CURRENT_BITMAP}}, $self->{BITMAP_INDEX};
-                push @{$self->{LAST_BITMAP}}, $self->{BITMAP_INDEX};
             }
             $self->{BITMAP_INDEX}++;
-
+            if ($self->{BACKWARD_DATA_REFERENCE} == $self->{NUM_BITMAPS}) {
+                my $numb = $self->{NUM_BITMAPS};
+                if (!defined $self->{BITMAP_START}[$numb]) {
+                    # Look up the element descriptor immediately
+                    # preceding the bitmap operator
+                    my $i = $idesc;
+                    $i-- while ($desc[$i] ne $self->{BITMAP_OPERATORS}->[-1]
+                                && $i >=0);
+                    $i-- while ($desc[$i] > 100000 && $i >=0);
+                    _croak "No element descriptor preceding bitmap" if $i < 0;
+                    $self->{BITMAP_START}[$numb] = $i;
+                } else {
+                    $self->{BITMAP_START}[$numb]--;
+                    _croak "Bitmap too big"
+                        if $self->{BITMAP_START}[$numb] < 0;
+                }
+            }
         } elsif ($self->{BUILD_BITMAP} and $self->{BITMAP_INDEX} > 0) {
             # We have finished building the bit map
             $self->{BUILD_BITMAP} = 0;
             $self->{BITMAP_INDEX} = 0;
+            if ($self->{BACKWARD_DATA_REFERENCE} != $self->{NUM_BITMAPS}) {
+                $self->{BITMAP_START}[$self->{NUM_BITMAPS}]
+                    = $self->{BITMAP_START}[$self->{BACKWARD_DATA_REFERENCE}];
+            }
         }
 
         # We now have a "real" data descriptor
@@ -4445,12 +4728,18 @@ sub _get_index_in_list {
 
 sub _apply_operator_descriptor {
     my $self = shift;
-    my ($id, $x, $y, $pos, $next_id, @operators) = @_;
+    my ($id, $x, $y, $pos, $isub, $next_id, @operators) = @_;
+    # $isub should be 0 for compressed messages, else subset number
+
     my $flow = '';
     my $bm_idesc = '';
 
+    # make $x and $y non-octal (not sure if this is really necessary)
+    $x += 0;
+    $y += 0;
+
     $_ = $id;
-    if (/^20[1238]000/) {
+    if (/^20[12378]000/) {
         # Cancellation of a data descriptor operator
         _complain("$id Cancelling unused operator")
             if $Strict_checking and !grep {$_ == $x} @operators;
@@ -4464,15 +4753,21 @@ sub _apply_operator_descriptor {
         } elsif ($x == 3) {
             $self->{NUM_CHANGE_OPERATORS}-- if $self->{NEW_REFVAL_OF};
             undef $self->{NEW_REFVAL_OF};
+        } elsif ($x == 7) {
+            $self->{NUM_CHANGE_OPERATORS}-- if $self->{CHANGE_SRW};
+            undef $self->{CHANGE_SRW};
         } elsif ($x == 8) {
             $self->{NUM_CHANGE_OPERATORS}-- if $self->{CHANGE_CCITTIA5_WIDTH};
             undef $self->{CHANGE_CCITTIA5_WIDTH};
         }
         $self->_spew(4, "$id * Reset ".
-                     ("width of CCITTIA5 field","data width","scale","reference values",)[$x % 8]) if $Spew;
+                     ("width of CCITTIA5 field","data width","scale","reference values",0,0,0,
+                     "increase of scale, reference value and data width")[$x % 8]) if $Spew;
         $flow = 'next';
     } elsif (/^201/) {
         # Change data width
+        _croak "201 operator cannot be nested within 207 operator"
+            if grep {$_ == 7} @operators;
         $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_WIDTH};
         $self->{CHANGE_WIDTH} = $y-128;
         $self->_spew(4, "$id * Change data width: $self->{CHANGE_WIDTH}") if $Spew;
@@ -4480,6 +4775,8 @@ sub _apply_operator_descriptor {
         $flow = 'next';
     } elsif (/^202/) {
         # Change scale
+        _croak "202 operator cannot be nested within 207 operator"
+            if grep {$_ == 7} @operators;
         $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_SCALE};
         $self->{CHANGE_SCALE} = $y-128;
         $self->_spew(4, "$id * Change scale: $self->{CHANGE_SCALE}") if $Spew;
@@ -4496,6 +4793,8 @@ sub _apply_operator_descriptor {
         $flow = 'next';
     } elsif (/^203/) {
         # Change reference value
+        _croak "203 operator cannot be nested within 207 operator"
+            if grep {$_ == 7} @operators;
         $self->_spew(4, "$id * Change reference value") if $Spew;
         # Get reference value from data stream ($y == number of bits)
         $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_REFERENCE_VALUE};
@@ -4538,7 +4837,13 @@ sub _apply_operator_descriptor {
 
     } elsif (/^207/) {
         # Increase scale, reference value and data width
-        _croak "$id Increase scale, reference value and data width (not implemented)";
+        _croak "207 operator cannot be nested within 201/202/203 operators"
+            if grep {$_ == 1 || $_ == 2 || $_ == 3} @operators;
+        $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_SRW};
+        $self->{CHANGE_SRW} = $y;
+        $self->_spew(4, "$id * Increase scale, reference value and data width: $y") if $Spew;
+        push @operators, $x;
+        $flow = 'next';
     } elsif (/^208/) {
         # Change data width for ascii data
         $self->{NUM_CHANGE_OPERATORS}++ if !$self->{CHANGE_CCITTIA5_WIDTH};
@@ -4575,10 +4880,17 @@ sub _apply_operator_descriptor {
     } elsif (/^223255/) {
         # Substituted values marker operator
         _croak "$id No bit map defined"
-            unless defined $self->{BITMAPS} and $self->{BITMAP_OPERATORS}[-1] eq '223000';
-        _croak "More 223255 encountered than current bit map allows"
-            unless @{$self->{CURRENT_BITMAP}};
-        $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
+            unless (defined $self->{CURRENT_BITMAP} || defined $self->{REUSE_BITMAP})
+            && $self->{BITMAP_OPERATORS}[-1] eq '223000';
+        if (defined $self->{REUSE_BITMAP}) {
+            _croak "More 223255 encountered than current bit map allows"
+                unless @{ $self->{REUSE_BITMAP}->[$isub] };
+            $bm_idesc = undef;
+        } else {
+            _croak "More 223255 encountered than current bit map allows"
+                unless @{$self->{CURRENT_BITMAP}};
+            $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
+        }
         $flow = 'redo_bitmap';
     } elsif (/^224000/) {
         # First order statistical values follow
@@ -4591,10 +4903,17 @@ sub _apply_operator_descriptor {
     } elsif (/^224255/) {
         # First order statistical values marker operator
         _croak "$id No bit map defined"
-            unless defined $self->{BITMAPS} and $self->{BITMAP_OPERATORS}[-1] eq '224000';
-        _croak "More 224255 encountered than current bit map allows"
-            unless @{$self->{CURRENT_BITMAP}};
-        $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
+            unless (defined $self->{CURRENT_BITMAP} || defined $self->{REUSE_BITMAP})
+            && $self->{BITMAP_OPERATORS}[-1] eq '224000';
+        if (defined $self->{REUSE_BITMAP}) {
+            _croak "More 224255 encountered than current bit map allows"
+                unless @{ $self->{REUSE_BITMAP}->[$isub] };
+            $bm_idesc = undef;
+        } else {
+            _croak "More 224255 encountered than current bit map allows"
+                unless @{$self->{CURRENT_BITMAP}};
+            $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
+        }
         $flow = 'redo_bitmap';
     } elsif (/^225000/) {
         # Difference statistical values follow
@@ -4607,10 +4926,17 @@ sub _apply_operator_descriptor {
     } elsif (/^225255/) {
         # Difference statistical values marker operator
         _croak "$id No bit map defined\n"
-            unless defined $self->{CURRENT_BITMAP} and $self->{BITMAP_OPERATORS}[-1] eq '225000';
-        _croak "More 225255 encountered than current bit map allows"
-            unless @{$self->{CURRENT_BITMAP}};
-        $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
+            unless (defined $self->{CURRENT_BITMAP} || defined $self->{REUSE_BITMAP})
+            && $self->{BITMAP_OPERATORS}[-1] eq '225000';
+        if (defined $self->{REUSE_BITMAP}) {
+            _croak "More 225255 encountered than current bit map allows"
+                unless @{ $self->{REUSE_BITMAP}->[$isub] };
+            $bm_idesc = undef;
+        } else {
+            _croak "More 225255 encountered than current bit map allows"
+                unless @{$self->{CURRENT_BITMAP}};
+            $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
+        }
         # Must remember to change data width and reference value
         $self->{NUM_CHANGE_OPERATORS}++ if !$self->{DIFFERENCE_STATISTICAL_VALUE};
         $self->{DIFFERENCE_STATISTICAL_VALUE} = 1;
@@ -4623,7 +4949,8 @@ sub _apply_operator_descriptor {
         _croak "$id Replaced/retained values marker (not implemented)";
     } elsif (/^235000/) {
         # Cancel backward data reference
-        _croak "$id Cancel backward data reference (not implemented)";
+        undef $self->{REUSE_BITMAP};
+        $self->{BACKWARD_DATA_REFERENCE} = $self->{NUM_BITMAPS} + 1;
     } elsif (/^236000/) {
         # Define data present bit map
         undef $self->{CURRENT_BITMAP};
@@ -4633,15 +4960,15 @@ sub _apply_operator_descriptor {
     } elsif (/^237000/) {
         # Use defined data present bit map
         _croak "$id No previous bit map defined"
-            unless defined $self->{LAST_BITMAP};
-        @{ $self->{CURRENT_BITMAP} } = @ { $self->{LAST_BITMAP} };
-        $self->{BUILD_BITMAP} = 0;
+            unless defined $self->{BITMAPS};
+        my %hash = @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}-1]->[$isub] };
+        $self->{REUSE_BITMAP}->[$isub] = [sort keys %hash];
         $flow = 'no_value';
     } elsif (/^237255/) {
         # Cancel 'use defined data present bit map'
         _complain("$id No data present bit map to cancel")
-            unless defined $self->{LAST_BITMAP};
-        undef $self->{LAST_BITMAP};
+            unless defined $self->{REUSE_BITMAP};
+        undef $self->{REUSE_BITMAP};
         $flow = 'next';
     } elsif (/^241000/) {
         # Define event
@@ -5294,7 +5621,7 @@ as leading and trailing white space.
 The BUFR table files should follow the format and naming conventions
 used by ECMWF libbufr software (download from
 http://www.ecmwf.int/products/data/software/download/bufr.html, unpack
-and you will find table files in the bufrtable directory). Other table
+and you will find table files in the bufrtables directory). Other table
 file formats exist and might on request be supported in future
 versions of Geo::BUFR.
 

@@ -221,7 +221,8 @@ sub decode {
         if ($current_subset_number > 0) {
             printf $OUT "\nSubset %d\n", $current_subset_number;
             if ($option{bitmap}) {
-                print $OUT $bufr->dumpsection4_with_bitmaps($data, $descriptors, $width);
+                print $OUT $bufr->dumpsection4_with_bitmaps($data, $descriptors,
+				  $current_subset_number, $width);
             } else {
                 print $OUT $bufr->dumpsection4($data, $descriptors, $width);
             }
@@ -464,7 +465,7 @@ Options may be abbreviated, e.g. C<--h> or C<-h> for C<--help>.
 To avoid having to use the C<--tablepath> option, you are adviced to
 set the invironment variable BUFR_TABLES to the directory where your
 BUFR tables are located (unless the default path provided by
-bufralter.pl works for you).
+bufrread.pl works for you).
 
 Each line in <descriptor file> should start with a BUFR descriptor (6
 digits).  Rest of line will be ignored. bufrread.pl will display values

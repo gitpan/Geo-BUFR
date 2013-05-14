@@ -29,6 +29,8 @@ Section 3:
     Compressed data:                   0
     Data descriptors unexpanded:       309007 222000 101000 031002 031031 001031 001032 101000 031002 033007 223000 101000 031002 031031 001031 001032 101000 031002 223255
 
+Subset 1
+
      1  001001               71  WMO BLOCK NUMBER [NUMERIC]
      2  001002              815  WMO STATION NUMBER [NUMERIC]
      3  002011               71  RADIOSONDE TYPE [CODE TABLE]

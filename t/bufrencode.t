@@ -7,11 +7,11 @@ use Config;
 
 my $perl = $Config{perlpath};
 
-my $output = `$perl ./bufrencode.pl --data t/307080.data_2 --metadata t/metadata.txt_ed4 -t t/bt`;
+my $output = `$perl ./bufrencode.pl --data t/307080.data --metadata t/metadata.txt_ed4 -t t/bt`;
 my $expected = read_file( 't/encoded_ed4', binmode => ':raw' ) ;
 is($output, $expected, 'testing bufrencode.pl on 2 synop bufr edition 4');
 
-$output = `$perl ./bufrencode.pl --data t/307080.data_2 --metadata t/metadata.txt_ed3 -t t/bt`;
+$output = `$perl ./bufrencode.pl --data t/307080.data --metadata t/metadata.txt_ed3 -t t/bt`;
 $expected = read_file( 't/encoded_ed3', binmode => ':raw' ) ;
 is($output, $expected, 'testing bufrencode.pl -t on 2 synop bufr edition 3');
 

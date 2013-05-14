@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 12;
+use Test::More tests => 19;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -41,7 +41,7 @@ $expected = read_file( 't/IOZX11_LFVW_060300.warn' );
 # Remove that as well as actual line number (to ease future changes in bufrread.pl)
 $output =~ s/line \d+[.]?/line/g;
 $expected =~ s/line \d+[.]?/line/g;
-is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for warnings');
+	  is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for warnings');
 
 `$perl ./bufrread.pl --strict_checking 2 t/IOZX11_LFVW_060300.bufr -t t/bt > t/out 2> t/err`;
 
@@ -76,3 +76,31 @@ $output = read_file( 't/out' );
 unlink 't/out';
 $expected = read_file( 't/208035.txt' );
 is($output, $expected, 'testing bufrread.pl on message containing 208Y');
+
+$output = `$perl ./bufrread.pl --tablepath ~/bufr/bufrtables t/multiple_qc.bufr -t t/bt`;
+$expected = read_file( 't/multiple_qc.txt' );
+is($output, $expected, 'testing bufrread.pl on satellite data with triple 222000');
+
+$output = `$perl ./bufrread.pl --tablepath ~/bufr/bufrtables t/multiple_qc_compressed.bufr -t t/bt`;
+$expected = read_file( 't/multiple_qc_compressed.txt' );
+is($output, $expected, 'testing bufrread.pl on compressed satellite data with triple 222000');
+
+$output = `$perl ./bufrread.pl --tablepath ~/bufr/bufrtables t/multiple_qc.bufr -t t/bt --bitmap`;
+$expected = read_file( 't/multiple_qc.txt_bitmap' );
+is($output, $expected, 'testing bufrread.pl -b on satellite data with triple 222000');
+
+$output = `$perl ./bufrread.pl --tablepath ~/bufr/bufrtables t/multiple_qc_vary.bufr -t t/bt --bitmap`;
+$expected = read_file( 't/multiple_qc_vary.txt_bitmap' );
+is($output, $expected, 'testing bufrread.pl -b on satellite data with triple 222000 and variable bitmaps');
+
+$output = `$perl ./bufrread.pl t/firstorderstat.bufr -t t/bt`;
+$expected = read_file( 't/firstorderstat.txt' );
+is($output, $expected, 'testing bufrread.pl on compressed satellite data with 224000 and 224255');
+
+$output = `$perl ./bufrread.pl --bitmap t/firstorderstat.bufr -t t/bt`;
+$expected = read_file( 't/firstorderstat.txt_bitmap' );
+is($output, $expected, 'testing bufrread.pl -b on satellite data with 224000 and large 224255 values');
+
+$output = `$perl ./bufrread.pl --codetables --all_operators t/firstorderstat.bufr -t t/bt`;
+$expected = read_file( 't/firstorderstat.txt_all' );
+is($output, $expected, 'testing bufrread.pl -c -a on data with operators mingled in bitmap and duplicated code table (001032)');
