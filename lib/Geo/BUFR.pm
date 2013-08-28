@@ -93,7 +93,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.23';
+our $VERSION = '1.24';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -386,7 +386,7 @@ sub set_update_sequence_number {
     my ($self, $update_number) = @_;
     _croak "Update sequence number not provided in set_update_sequence_number"
         unless defined $update_number;
-    _croak "Update sequence number must be a non negative integer, is '$update_number'"
+    _croak "Update sequence number must be a nonnegative integer, is '$update_number'"
         unless $update_number =~ /^\d+$/;
     _croak "Update sequence number exceeds limit 255, is '$update_number'"
         if $update_number > 255;
@@ -1282,12 +1282,15 @@ sub _decode_sections {
     $self->{COMPRESSED_DATA}  = vec($sec3[3] & 0x40,1,1); # extract 2. bit
     $self->_spew(3, "Number of subsets: %d Observed data: %d Compressed data: %d",
                  $self->{NUM_SUBSETS}, $self->{OBSERVED_DATA}, $self->{COMPRESSED_DATA}) if $Spew;
+    _complain("Bits 3-8 in octet 7 in section 3 are not 0 (octet 7 = $sec3[3])")
+	if ($Strict_checking and ($sec3[3] & 0x3f) != 0);
 
     ##  Decode Section 4 (Data Section)  ##
 
     $self->_spew(2, "Decoding section 4") if $Spew;
 
     my $sec4_len = unpack 'N', "\0$self->{BUFR_STREAM}";
+    $self->_spew(2, "Length of section 4: %d", $sec4_len) if $Spew;
 
     # Check that stated length of section 4 makes sense
     _croak "Length of section 4 too small (< 4): $sec4_len"
@@ -1327,8 +1330,8 @@ sub _decode_sections {
 
 ##  Read next BUFR message and decode. Set $self->{ERROR_IN_MESSAGE} if
 ##  anything goes seriously wrong, so that sub next_observation can use
-##  this to skip to next message if user choose to trap the call to
-##  next_observation in an eval and then calling next_observation again.
+##  this to skip to next message if user chooses to trap the call to
+##  next_observation in an eval and then calls next_observation again.
 sub _next_message {
     my $self = shift;
 
@@ -1345,8 +1348,8 @@ sub _next_message {
     eval { $self->_decode_sections($msg, $edition, $length, $sec0) };
     if ($@) {
         $self->{ERROR_IN_MESSAGE} = 1;
-        die $@, "\n";  # Could use croak, but then 2 "at ... line ..."
-                       # will be printed to STDERR
+        die $@;  # Could use croak, but then 2 "at ... line ..."  will
+		 # be printed to STDERR
     }
 
     $self->{CURRENT_MESSAGE}++;
@@ -1356,7 +1359,7 @@ sub _next_message {
     eval { $table_version = $self->load_BDtables() };
     if ($@) {
         $self->{ERROR_IN_MESSAGE} = 1;
-        die $@, "\n";
+        die $@;
     }
     $self->_spew(2, "BUFR table version is $table_version") if $Spew;
 
@@ -1377,7 +1380,7 @@ sub _next_message {
         };
         if ($@) {
             $self->{ERROR_IN_MESSAGE} = 1;
-            die $@, "\n";
+            die $@;
         }
     }
 
@@ -1392,7 +1395,7 @@ sub _next_message {
     };
     if ($@) {
         $self->{ERROR_IN_MESSAGE} = 1;
-        die $@, "\n";
+        die $@;
     }
 
     return;
@@ -4566,9 +4569,9 @@ sub _encode_compressed_bitstream {
 
 ## Check that the length of data section computed from expansion of
 ## section 3 ($comp_len) equals actual length of data part of section
-## 4, allowing for padding one bits according to BUFR Regulation 94.1.3
+## 4, allowing for padding zero bits according to BUFR Regulation 94.1.3
 ## Strict checking should also check that padding actually consists of
-## one bits only.
+## zero bits only.
 sub _check_section4_length {
     my $self = shift;
     my ($comp_len, $actual_len) = @_;
@@ -4589,11 +4592,11 @@ sub _check_section4_length {
                       . " which is an error in BUFR edition $bufr_edition");
         }
         my $comp_bytes = int($comp_len/8);
-        $comp_bytes++ if $comp_len % 8; # Need to pad with one bits
-        $comp_bytes++ if $bufr_edition < 4 and $comp_bytes % 2; # Need to pad with an extra byte of one bits
+        $comp_bytes++ if $comp_len % 8; # Need to pad with zero bits
+        $comp_bytes++ if $bufr_edition < 4 and $comp_bytes % 2; # Need to pad with an extra byte of zero bits
         if ($actual_bytes > $comp_bytes) {
-            _complain("Section 4 longer ($actual_bytes bytes) than expected"
-                      . " from section 3 ($comp_bytes bytes)");
+            _complain("Binary data part of section 4 longer ($actual_bytes bytes)"
+                      . " than expected from section 3 ($comp_bytes bytes)");
         }
     }
     return;
@@ -4667,7 +4670,7 @@ sub _validate_datetime {
     _complain("Invalid date in section 1: $@") if $@;
 }
 
-## Return number of bits necessary to store the non negative number $n
+## Return number of bits necessary to store the nonnegative number $n
 ## (1 for 0,1, 2 for 2,3, 3 for 4,5,6,7 etc)
 sub _get_number_of_bits_to_store {
     my $n = shift;
@@ -4700,7 +4703,7 @@ sub _minimum {
     return ($min, $idx);
 }
 
-## Find maximum value among set of non negative numbers or undefined values
+## Find maximum value among set of nonnegative numbers or undefined values
 sub _maximum {
     my $v_ref = shift;
     my $max = 0;
@@ -5513,7 +5516,7 @@ intended as module internal subroutines):
   $value = Geo::BUFR->bitstream2dec($bitstream,$bitpos,$num_bits);
 
 Extracts $num_bits bits from $bitstream, starting at bit $bitpos. The
-extracted bits are interpreted as a non negative integer.  Returns
+extracted bits are interpreted as a nonnegative integer.  Returns
 undef if all bits extracted are 1 bits.
 
   $ascii = Geo::BUFR->bitstream2ascii($bitstream,$bitpos,$num_bytes);
@@ -5524,7 +5527,7 @@ the extracted bytes are all 1 bits.
 
   Geo::BUFR->dec2bitstream($value,$bitstream,$bitpos,$bitlen);
 
-Encodes non-negative integer value $value in $bitlen bits in
+Encodes nonnegative integer value $value in $bitlen bits in
 $bitstream, starting at bit $bitpos. Last byte will be padded with 1
 bits. $bitstream must have been initialized to a string long enough to
 hold $value. The parts of $bitstream before $bitpos and after last
@@ -5652,7 +5655,11 @@ Excessive bytes in section 4 (section longer than computed from section 3)
 
 =item *
 
-Compression set in section 1 for one subset message (BUFR reg. 94.6.3.2)
+Compression set in section 3 for one subset message (BUFR reg. 94.6.3.2)
+
+=item *
+
+Bits 3-8 in octet 7 in section 3 not set to zero
 
 =item *
 

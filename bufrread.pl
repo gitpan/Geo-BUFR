@@ -27,7 +27,7 @@ use Geo::BUFR;
 # Will be used if neither --tablepath nor $ENV{BUFR_TABLES} is set
 use constant DEFAULT_TABLE_PATH => '/usr/local/lib/bufrtables';
 # Ought to be your most up-to-date C table
-use constant DEFAULT_CTABLE => 'C0000000000000017000';
+use constant DEFAULT_CTABLE => 'C0000000000000019000';
 
 # Parse command line options
 my %option = ();
@@ -146,16 +146,14 @@ sub decode {
             warn $@;
             # Try to extract message number and ahl of the bulletin
             # where the error occurred
-            eval {
-                $current_message_number = $bufr->get_current_message_number();
-                $current_ahl = $bufr->get_current_ahl() || '';
-                my $error_msg;
-                $error_msg = "In message $current_message_number"
-                    if $current_message_number;
-                $error_msg .= " contained in bulletin with ahl $current_ahl\n"
-                    if $current_ahl;
-                warn $error_msg if $error_msg;
-            };
+	    $current_message_number = $bufr->get_current_message_number();
+	    if ($current_message_number) {
+		my $error_msg = "In message $current_message_number";
+		$current_ahl = $bufr->get_current_ahl();
+		$error_msg .= " contained in bulletin with ahl $current_ahl\n"
+		    if $current_ahl;
+		warn $error_msg if $error_msg;
+	    }
             exit(1) if $option{on_error_stop};
             next READLOOP;
         }
@@ -218,15 +216,32 @@ sub decode {
 
         # If this is last message and there is a BUFR formatting
         # error, we might end up here with current subset number 0
-        if ($current_subset_number > 0) {
-            printf $OUT "\nSubset %d\n", $current_subset_number;
-            if ($option{bitmap}) {
-                print $OUT $bufr->dumpsection4_with_bitmaps($data, $descriptors,
-				  $current_subset_number, $width);
-            } else {
-                print $OUT $bufr->dumpsection4($data, $descriptors, $width);
-            }
-        }
+        last READLOOP if $current_subset_number == 0;
+
+	printf $OUT "\nSubset %d\n", $current_subset_number;
+
+	# If an error is encountered during dumping of section 4, skip
+	# this subset while printing the error message to STDERR, also
+	# displaying ahl of bulletin if found.
+	my $dump;
+	eval {
+	    $dump = ( $option{bitmap} )
+		? $bufr->dumpsection4_with_bitmaps($data, $descriptors,
+						   $current_subset_number, $width)
+		: $bufr->dumpsection4($data, $descriptors, $width);
+	};
+	if ($@) {
+	    warn $@;
+	    my $error_msg = "In message $current_message_number"
+		. " and subset $current_subset_number";
+	    $error_msg .= " contained in bulletin with ahl $current_ahl\n"
+		if $current_ahl;
+	    warn $error_msg;
+	    exit(1) if $option{on_error_stop};
+	    next READLOOP;
+	} else {
+	    print $OUT $dump;
+	}
     }
 }
 
@@ -450,7 +465,7 @@ examples of use.
                        n=1 Issue warning if (recoverable) error in
                            BUFR format
                        n=2 Croak if (recoverable) error in BUFR format.
-                           Nothing more in this message will be decoded.
+                           Nothing more in this message/subset will be decoded.
    --on_error_stop Stop processing as soon as an error occurs during decoding
    --all_operators Show all operator descriptors when printing section 4
    --tablepath <path to BUFR tables>

@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Geo-BUFR
-version:            1.23
+version:            1.24
 abstract:           Perl extension for handling of WMO BUFR files.
 author:
     - P.Sannes <pal.sannes@met.no>

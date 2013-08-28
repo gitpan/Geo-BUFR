@@ -1,5 +1,10 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.24 2013-08-28
+- Bugfix in bufrread.pl (when running with --strict_checking 2).
+- Strict_checking for (reserved) 0 bits 3-8 in octet 7 in section 3.
+- Default tables for utility programs changed to master table version 19.
+
 1.23 2013-05-14
 - Supporting data description operators 207Y and 235000.
 - Several bugfixes related to bit maps.
