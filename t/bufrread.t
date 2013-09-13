@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 19;
+use Test::More tests => 20;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -104,3 +104,7 @@ is($output, $expected, 'testing bufrread.pl -b on satellite data with 224000 and
 $output = `$perl ./bufrread.pl --codetables --all_operators t/firstorderstat.bufr -t t/bt`;
 $expected = read_file( 't/firstorderstat.txt_all' );
 is($output, $expected, 'testing bufrread.pl -c -a on data with operators mingled in bitmap and duplicated code table (001032)');
+
+$output = `$perl ./bufrread.pl t/retained.bufr -t t/bt`;
+$expected = read_file( 't/retained.txt' );
+is($output, $expected, 'testing bufrread.pl on message with 232000 and 204YYY operators');

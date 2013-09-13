@@ -34,7 +34,7 @@ my %option = ();
 GetOptions(
            \%option,
            'all_operators',# Show all operator descriptors when printing section 4
-           'bitmap',       # Display bit mapped values on same line
+           'bitmap',       # Display bit-mapped values on same line
            'codetables',   # Use code and flag tables to resolve values
            'data_only',    # Print section 4 (data section) only
            'filter=s',     # Decode observations meeting criteria in <filter file> only
@@ -452,7 +452,7 @@ examples of use.
                    Display parameters with descriptors in <descriptor file> only
    --filter <filter file>
                    Decode observations meeting criteria in <filter file> only
-   --bitmap        Display bit mapped values on same line
+   --bitmap        Display bit-mapped values on same line
    --noqc          Do not decode quality control
                    (or any descriptors following 222000)
    --outfile <filename>
@@ -516,6 +516,15 @@ If an error occurs during decoding (typically because the required
 BUFR table is missing or message is corrupt) the message is skipped,
 and the number of errors is reported at end of output. You can change
 this default behaviour, however, by setting C<--on_error_stop>.
+
+=head1 CAVEAT
+
+Option --bitmap may not work properly for complicated BUFR messages.
+Namely, when the first bit-map is encountered, no more data values (or
+their descriptors) will be displayed unless they refer to the
+preceding data values by a bit-map. And output is not to be trusted
+if a bit-map refers to another bit-map or the bit-mapped values are
+combined with 204YYY (add associated field operator).
 
 =head1 AUTHOR
 

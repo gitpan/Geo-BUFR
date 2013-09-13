@@ -1,5 +1,8 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.25 2013-09-13
+- Supporting data description operators 232000 and 232225.
+
 1.24 2013-08-28
 - Bugfix in bufrread.pl (when running with --strict_checking 2).
 - Strict_checking for (reserved) 0 bits 3-8 in octet 7 in section 3.

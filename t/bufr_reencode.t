@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 14;
+use Test::More tests => 15;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -90,3 +90,10 @@ $output = read_file('t/out');
 $expected = read_file('t/firstorderstat.bufr');
 unlink 't/out';
 is($output, $expected, 'testing bufr_reencode.pl -o on compressed BUFR file with first order statistics (224000)');
+
+`$perl ./bufr_reencode.pl t/retained.txt -o t/out -t t/bt`;
+$output = read_file('t/out');
+$expected = read_file('t/retained.bufr');
+unlink 't/out';
+is($output, $expected, 'testing bufr_reencode.pl -o on BUFR file with resolved/retained values');
+

@@ -71,9 +71,9 @@ to which the last used bitmap relates (fetched from $self->{BITMAPS}),
 then shifted as the new element in $self->{BITMAPS} is built up.
 
 For operator 222000 ('Quality information follows') the bit mapped
-descriptor should be a 033-descriptor. For 22[3-5] the bit mapped
-value should be the data value of the 22[3-5]255 descriptors following
-the operator in BUFR section 3, with bit mapped descriptor
+descriptor should be a 033-descriptor. For 22[3-5]/232 the bit mapped
+value should be the data value of the 22[3-5]255/232255 descriptors
+following the operator in BUFR section 3, with bit mapped descriptor
 $desc[bm_idesc] equal to $desc[$idesc] (with data width and reference
 value changed for 225255)
 
@@ -93,7 +93,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.24';
+our $VERSION = '1.25';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -1699,7 +1699,7 @@ my %OPERATOR_NAME_B =
       223255 => 'SUBSTITUTED VALUES MARKER OPERATOR',
       224255 => 'FIRST ORDER STATISTICAL VALUES MARKER OPERATOR',
       225255 => 'DIFFERENCE STATISTICAL STATISTICAL VALUES MARKER OPERATOR',
-      232255 => 'REPLACE/RETAINED VALUES MARKER OPERATOR',
+      232255 => 'REPLACED/RETAINED VALUES MARKER OPERATOR',
       237255 => 'CANCEL DEFINED DATA PRESENT BIT MAP',
  );
 # Operator classes which should normally not be displayed in dumpsection4
@@ -1736,12 +1736,13 @@ sub _get_operator_name {
 ## offer a much shorter and easier to read dump of section 4 when bit
 ## maps has been used (i.e. for 222000 quality information, 223000
 ## substituted values, 224000 first order statistics, 225000
-## difference statistics). '*******' is displayed if data is not
-## present in bit map (bit set to 1 in 031031 or data not covered by
-## the 031031 descriptors), 'missing' is displayed if value is
-## missing.  But note that we miss other descriptors like 001031 and
-## 001032 if these come after 222000 etc with the current
-## implementation.
+## difference statistics, 232000 replaced/retained values). '*******'
+## is displayed if data is not present in bit map (bit set to 1 in
+## 031031 or data not covered by the 031031 descriptors), 'missing' is
+## displayed if value is missing.  But note that we miss other
+## descriptors like 001031 and 001032 if these come after 222000 etc
+## with the current implementation. And there are more shortcomings,
+## described in CAVEAT section in POD for bufrread.pl
 sub dumpsection4_with_bitmaps {
     my $self = shift;
     my $data = shift;
@@ -1789,10 +1790,8 @@ sub dumpsection4_with_bitmaps {
     # Loop over data descriptors
   ID:
     foreach my $id ( @{ $descriptors } ) {
-        _croak "Bitmapped supplied character information 205Y not implemented"
-            if $id =~ /^205/;
         # Stop printing when the bit map part starts
-        last ID if $id =~ /^2/;
+        last ID if ($id =~ /^22[2-5]/ or $id =~ /^232/);
 
         # Get the data value
         my $value = defined $data->[$idx] ? $data->[$idx] : 'missing';
@@ -2382,6 +2381,9 @@ sub _decode_bitstream {
                 # First extract associated field
                 my $width = $self->{ADD_ASSOCIATED_FIELD};
                 my $value = bitstream2dec($bitstream, $pos, $width);
+                # All bits set to 1 for associated field is NOT
+                # interpreted as missing value
+		$value = 2**$width - 1 if ! defined $value;
                 $pos += $width;
                 push @{$subset_desc[$isub]}, 999999;
                 push @{$subset_data[$isub]}, $value;
@@ -4945,15 +4947,36 @@ sub _apply_operator_descriptor {
         $self->{DIFFERENCE_STATISTICAL_VALUE} = 1;
         $flow = 'redo_bitmap';
     } elsif (/^232000/) {
-        # Replaced/retained values follow
-        _croak "$id Replaced/retained values (not implemented)";
+        # Replaced/retained values follow, each one following a descriptor 232255.
+        # Which value they are a replacement for is defined by a bit map, which
+        # already may have been defined (if descriptor 23700 is encountered),
+        # or will shortly be defined by data present descriptors (031031)
+        push @{ $self->{BITMAP_OPERATORS} }, '232000';
+        $self->{NUM_BITMAPS}++;
+        # Mark that a bit map probably needs to be built
+        $self->{BUILD_BITMAP} = 1;
+        $self->{BITMAP_INDEX} = 0;
+        $flow = 'no_value';
     } elsif (/^232255/) {
         # Replaced/retained values marker operator
-        _croak "$id Replaced/retained values marker (not implemented)";
+        _croak "$id No bit map defined"
+            unless (defined $self->{CURRENT_BITMAP} || defined $self->{REUSE_BITMAP})
+            && $self->{BITMAP_OPERATORS}[-1] eq '232000';
+        if (defined $self->{REUSE_BITMAP}) {
+            _croak "More 232255 encountered than current bit map allows"
+                unless @{ $self->{REUSE_BITMAP}->[$isub] };
+            $bm_idesc = undef;
+        } else {
+            _croak "More 232255 encountered than current bit map allows"
+                unless @{$self->{CURRENT_BITMAP}};
+            $bm_idesc = shift @{$self->{CURRENT_BITMAP}};
+        }
+        $flow = 'redo_bitmap';
     } elsif (/^235000/) {
         # Cancel backward data reference
         undef $self->{REUSE_BITMAP};
         $self->{BACKWARD_DATA_REFERENCE} = $self->{NUM_BITMAPS} + 1;
+        $flow = 'no_value';
     } elsif (/^236000/) {
         # Define data present bit map
         undef $self->{CURRENT_BITMAP};

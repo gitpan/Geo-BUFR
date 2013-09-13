@@ -73,6 +73,8 @@ t/multiple_qc_vary.txt
 t/multiple_qc_vary.txt_bitmap
 t/noexpand.txt
 t/param
+t/retained.bufr
+t/retained.txt
 t/substituted.bufr
 t/substituted.txt
 t/substituted.txt_bitmap
