@@ -130,7 +130,7 @@ Options (may be abbreviated, e.g. C<--h> or C<-h> for C<--help>):
                              BUFR format
                          n=2 (default) Croak if (recoverable) error in BUFR format.
                              Nothing more in this message will be encoded.
-   --verbose n           Set verbose level to n, 0<=n<=5 (default 0).
+   --verbose n           Set verbose level to n, 0<=n<=6 (default 0).
                          Verbose output is sent to STDOUT, so ought to
                          be combined with option --outfile
    --tablepath <path to BUFR tables>

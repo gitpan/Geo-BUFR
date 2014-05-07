@@ -43,7 +43,7 @@ my $nil_msg = $new_bufr->encode_nil_message($stationid_ref,[2,3]);
 my $nil_bufr = Geo::BUFR->new($nil_msg);
 
 # Then join the nil message with subset 3 and 1 from $bufr3
-Geo::BUFR->set_verbose(3);
+Geo::BUFR->set_verbose(2);
 my ($data_refs,$desc_refs,$N) =
     Geo::BUFR->join_subsets($bufr3,[3,1],$nil_bufr);
 my $join_bufr = Geo::BUFR->new();

@@ -46,7 +46,7 @@ GetOptions(
            'param=s',      # Decode parameters with descriptors in <descriptor file> only
            'strict_checking=i', # Enable/disable strict checking of BUFR format
            'tablepath=s',  # Set BUFR table path
-           'verbose=i',    # Set verbose level to n, 0<=n<=3 (default 0)
+           'verbose=i',    # Set verbose level to n, 0<=n<=6 (default 0)
            'width=i',      # Set width of values field (default is 15 characters)
        ) or pod2usage(-verbose => 0);
 
@@ -122,9 +122,9 @@ foreach my $inputfname ( @ARGV ) {
 }
 
 
-# Extract data from BUFR file. Print WMO ahl for first message in
-# each WMO bulletin, print message number for each new message, print
-# subset number for each subset.
+# Extract data from BUFR file. Print AHL for first message in each GTS
+# bulletin, print message number for each new message, print subset
+# number for each subset.
 sub decode {
     my $bufr = shift;          # BUFR object
 
@@ -146,17 +146,19 @@ sub decode {
             warn $@;
             # Try to extract message number and ahl of the bulletin
             # where the error occurred
-	    $current_message_number = $bufr->get_current_message_number();
-	    if ($current_message_number) {
-		my $error_msg = "In message $current_message_number";
-		$current_ahl = $bufr->get_current_ahl();
-		$error_msg .= " contained in bulletin with ahl $current_ahl\n"
-		    if $current_ahl;
-		warn $error_msg if $error_msg;
-	    }
+            $current_message_number = $bufr->get_current_message_number();
+            if (defined $current_message_number) {
+                my $error_msg = "In message $current_message_number";
+                $current_ahl = $bufr->get_current_ahl();
+                $error_msg .= " contained in bulletin with ahl $current_ahl\n"
+                    if $current_ahl;
+                warn $error_msg if $error_msg;
+            }
             exit(1) if $option{on_error_stop};
             next READLOOP;
         }
+        # Would really liked to test for !$data here, but then we
+        # would miss messages with 0 subsets (which have no data)
 
         if ($option{codetables}) {
             # Load C table, trying first to use same table version as
@@ -168,7 +170,9 @@ sub decode {
         }
 
         my $current_subset_number = $bufr->get_current_subset_number();
-        my $nsubsets = $bufr->get_number_of_subsets();
+        # If next_observation() did find a BUFR message, subset number
+        # should have been set to at least 1 (even in a 0 subset message)
+        last READLOOP if $current_subset_number == 0;
 
         if ($current_subset_number == 1) {
             $current_message_number = $bufr->get_current_message_number();
@@ -214,34 +218,30 @@ sub decode {
                 = param($data, $descriptors, @requested_desc);
         }
 
-        # If this is last message and there is a BUFR formatting
-        # error, we might end up here with current subset number 0
-        last READLOOP if $current_subset_number == 0;
+        printf $OUT "\nSubset %d\n", $current_subset_number;
 
-	printf $OUT "\nSubset %d\n", $current_subset_number;
-
-	# If an error is encountered during dumping of section 4, skip
-	# this subset while printing the error message to STDERR, also
-	# displaying ahl of bulletin if found.
-	my $dump;
-	eval {
-	    $dump = ( $option{bitmap} )
-		? $bufr->dumpsection4_with_bitmaps($data, $descriptors,
-						   $current_subset_number, $width)
-		: $bufr->dumpsection4($data, $descriptors, $width);
-	};
-	if ($@) {
-	    warn $@;
-	    my $error_msg = "In message $current_message_number"
-		. " and subset $current_subset_number";
-	    $error_msg .= " contained in bulletin with ahl $current_ahl\n"
-		if $current_ahl;
-	    warn $error_msg;
-	    exit(1) if $option{on_error_stop};
-	    next READLOOP;
-	} else {
-	    print $OUT $dump;
-	}
+        # If an error is encountered during dumping of section 4, skip
+        # this subset while printing the error message to STDERR, also
+        # displaying ahl of bulletin if found.
+        my $dump;
+        eval {
+            $dump = ( $option{bitmap} )
+                ? $bufr->dumpsection4_with_bitmaps($data, $descriptors,
+                                                   $current_subset_number, $width)
+                : $bufr->dumpsection4($data, $descriptors, $width);
+        };
+        if ($@) {
+            warn $@;
+            my $error_msg = "In message $current_message_number"
+                . " and subset $current_subset_number";
+            $error_msg .= " contained in bulletin with ahl $current_ahl\n"
+                if $current_ahl;
+            warn $error_msg;
+            exit(1) if $option{on_error_stop};
+            next READLOOP;
+        } else {
+            print $OUT $dump;
+        }
     }
 }
 
@@ -435,8 +435,7 @@ sub filter_observation {
 =head1 DESCRIPTION
 
 Extract BUFR messages from BUFR file(s) and print the decoded content
-to screen. Will include WMO ahl if the BUFR message is part of a WMO
-bulletin.
+to screen, including AHL (Abbreviated Header Line) if present.
 
 Execute without arguments for Usage, with option C<--help> for some
 additional info. See also L</https://wiki.met.no/bufr.pm/start> for
@@ -470,7 +469,7 @@ examples of use.
    --all_operators Show all operator descriptors when printing section 4
    --tablepath <path to BUFR tables>
                    Set path to BUFR tables (overrides ENV{BUFR_TABLES})
-   --verbose n     Set verbose level to n, 0<=n<=5 (default 0). n=1 will
+   --verbose n     Set verbose level to n, 0<=n<=6 (default 0). n=1 will
                    show the tables loaded.
    --help          Display Usage and explain the options used. For even
                    more info you might prefer to consult perldoc bufrread.pl
@@ -519,7 +518,7 @@ this default behaviour, however, by setting C<--on_error_stop>.
 
 =head1 CAVEAT
 
-Option --bitmap may not work properly for complicated BUFR messages.
+Option C<--bitmap> may not work properly for complicated BUFR messages.
 Namely, when the first bit-map is encountered, no more data values (or
 their descriptors) will be displayed unless they refer to the
 preceding data values by a bit-map. And output is not to be trusted

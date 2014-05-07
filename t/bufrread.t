@@ -1,7 +1,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 20;
+use Test::More tests => 28;
 use File::Slurp qw(read_file);
 use Config;
 
@@ -27,32 +27,32 @@ $output = `$perl ./bufrread.pl --all_operators t/associated.bufr -t t/bt`;
 $expected = read_file( 't/associated.txt' );
 is($output, $expected, 'testing bufrread.pl -a on message with associated values and 201-2 operators');
 
-`$perl ./bufrread.pl --strict_checking 1 t/IOZX11_LFVW_060300.bufr -t t/bt > t/out 2> t/warn`;
+`$perl ./bufrread.pl --strict_checking 1 t/IOZX11_XXXX_060300.bufr -t t/bt > t/out 2> t/warn`;
 
 $output = read_file( 't/out' );
 unlink 't/out';
-$expected = read_file( 't/IOZX11_LFVW_060300.txt_1' );
+$expected = read_file( 't/IOZX11_XXXX_060300.txt_1' );
 is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for output');
 
 $output = read_file( 't/warn' );
 unlink 't/warn';
-$expected = read_file( 't/IOZX11_LFVW_060300.warn' );
+$expected = read_file( 't/IOZX11_XXXX_060300.warn' );
 # Newer versions of perl might add '.' to end of warning/error message.
 # Remove that as well as actual line number (to ease future changes in bufrread.pl)
 $output =~ s/line \d+[.]?/line/g;
 $expected =~ s/line \d+[.]?/line/g;
 	  is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for warnings');
 
-`$perl ./bufrread.pl --strict_checking 2 t/IOZX11_LFVW_060300.bufr -t t/bt > t/out 2> t/err`;
+`$perl ./bufrread.pl --strict_checking 2 t/IOZX11_XXXX_060300.bufr -t t/bt > t/out 2> t/err`;
 
 $output = read_file( 't/out' );
 unlink 't/out';
-$expected = read_file( 't/IOZX11_LFVW_060300.txt_2' );
+$expected = read_file( 't/IOZX11_XXXX_060300.txt_2' );
 is($output, $expected, 'testing bufrread.pl -s 1 on buoy message for output');
 
 $output = read_file( 't/err' );
 unlink 't/err';
-$expected = read_file( 't/IOZX11_LFVW_060300.err' );
+$expected = read_file( 't/IOZX11_XXXX_060300.err' );
 # Newer versions of perl might add '.' to end of warning/error message.
 # Remove that as well as actual line number (to ease future changes in bufrread.pl)
 $output =~ s/line \d+[.]?/line/g;
@@ -108,3 +108,64 @@ is($output, $expected, 'testing bufrread.pl -c -a on data with operators mingled
 $output = `$perl ./bufrread.pl t/retained.bufr -t t/bt`;
 $expected = read_file( 't/retained.txt' );
 is($output, $expected, 'testing bufrread.pl on message with 232000 and 204YYY operators');
+
+`$perl ./bufrread.pl t/BUFRBUFR.bufr -t t/bt > t/out 2> t/err`;
+
+$output = read_file( 't/out' );
+unlink 't/out';
+$expected = read_file( 't/1xBUFRSYNOP-ed4.txt' );
+is($output, $expected, "testing bufrread.pl on a BUFR SYNOP preceded by 'BUFR'");
+
+$output = read_file( 't/err' );
+unlink 't/err';
+$expected = read_file( 't/BUFRBUFR.err' );
+# Newer versions of perl might add '.' to end of warning/error message.
+# Remove that as well as actual line number (to ease future changes in bufrread.pl)
+$output =~ s/line \d+[.]?/line/g;
+$expected =~ s/line \d+[.]?/line/g;
+is($output, $expected, "testing bufrread.pl on a BUFR SYNOP preceded by 'BUFR' for error message");
+
+`$perl ./bufrread.pl t/short_truncated_temp_synop.bufr  -t t/bt > t/out 2> t/err`;
+
+$output = read_file( 't/out' );
+unlink 't/out';
+$expected = read_file( 't/1xBUFRSYNOP-ed4.txt' );
+is($output, $expected, 'testing bufrread.pl on truncated temp with supposed length greater than rest of file (containing a synop)');
+
+$output = read_file( 't/err' );
+unlink 't/err';
+$expected = read_file( 't/short_truncated_temp_synop.err' );
+$output =~ s/line \d+[.]?/line/g;
+$expected =~ s/line \d+[.]?/line/g;
+is($output, $expected, 'testing bufrread.pl on truncated temp with supposed length greater than rest of file (containing a synop) for error message');
+
+`$perl ./bufrread.pl t/long_truncated_temp_synop.bufr  -t t/bt > t/out 2> t/err`;
+
+$output = read_file( 't/out' );
+unlink 't/out';
+$expected = read_file( 't/1xBUFRSYNOP-ed4.txt' );
+is($output, $expected, 'testing bufrread.pl on truncated temp supposed to end within next synop');
+
+$output = read_file( 't/err' );
+unlink 't/err';
+$expected = read_file( 't/long_truncated_temp_synop.err' );
+$output =~ s/line \d+[.]?/line/g;
+$expected =~ s/line \d+[.]?/line/g;
+is($output, $expected, 'testing bufrread.pl for error message on truncated temp supposed to end within next synop');
+
+`$perl ./bufrread.pl t/long_truncated_temp_synop_temp.bufr  -t t/bt > t/out 2> t/err`;
+
+$output = read_file( 't/out' );
+unlink 't/out';
+$expected = read_file( 't/long_truncated_temp_synop_temp.txt' );
+is($output, $expected, 'testing bufrread.pl on truncated temp supposed to end within next synop,'
+. 'which is followed by new temp and with ahls included');
+
+$output = read_file( 't/err' );
+unlink 't/err';
+$expected = read_file( 't/long_truncated_temp_synop_temp.err' );
+$output =~ s/line \d+[.]?/line/g;
+$expected =~ s/line \d+[.]?/line/g;
+is($output, $expected, 'testing bufrread.pl for error message on truncated temp supposed to end within next synop,'
+. 'which is followed by new temp and with ahls included');
+

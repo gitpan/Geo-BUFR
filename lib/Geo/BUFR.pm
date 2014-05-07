@@ -93,7 +93,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.25';
+our $VERSION = '1.26';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -103,12 +103,24 @@ bootstrap Geo::BUFR $VERSION;
 
 # Some package globals
 our $Verbose = 0;
+
+# $Verbose or $self->{VERBOSE} > 0 leads to the following output, all
+# except for level 6 on lines starting with 'BUFR.pm: ':
+# 1 -> B,C,D tables used (full path)
+# 2 -> Identifying stages of processing, displaying length of sections
+#      and some additional data from section 1 and 3
+# 3 -> All descriptors and values extracted
+# 4 -> Operator specific information, including delayed replication
+#      and repetition
+# 5 -> BUFR compression specific information
+# 6 -> Calling dumpsection0,1,3
+
 our $Spew = 0; # To avoid the overhead of subroutine calls to _spew
                # (which is called a lot), $Spew is set to 1 if global
                # $Verbose or at least one object VERBOSE is set > 1.
                # This should speed up execution a bit in the common
-               # situation when no verbose mode (or only BUFR tables
-               # used) is requested
+               # situation when no verbose output (except possibly
+               # the BUFR tables used) is requested
 our $Noqc = 0; # If set to true will prevent decoding (or encoding) of
                # any descriptors after 222000 is met
 our $Strict_checking = 0; # Ignore recoverable errors in BUFR format
@@ -272,8 +284,9 @@ sub copy_from {
 }
 
 
-##  Set debug level. Also set $Spew to true if debug level > 1 is set (we
-##  don't bother to reset $Spew to 0 if all debug levels return to 0 or 1)
+##  Set debug level. Also set $Spew to true if debug level > 1 is set
+##  (we don't bother to reset $Spew to 0 if all debug levels later are
+##  reset to 0 or 1)
 sub set_verbose {
     my $self = shift;
     my $verbose = shift;
@@ -515,7 +528,7 @@ sub set_year_of_century {
     _complain "year_of_century > 100 in set_year_of_century: $year_of_century"
         if $year_of_century > 100;
     # A common mistake is to set year_of_century for year 2000 to 0, should be 100
-    $self->{YEAR_OF_CENTURY} = ($year_of_century == 0) ? 100 : $year_of_century;
+    $self->{YEAR_OF_CENTURY} = $year_of_century == 0 ? 100 : $year_of_century;
     return 1;
 }
 sub get_year_of_century {
@@ -524,7 +537,7 @@ sub get_year_of_century {
         return $self->{YEAR_OF_CENTURY};
     } elsif (defined $self->{YEAR}) {
         my $yy = $self->{YEAR} % 100;
-        return ($yy == 0) ? 100 : $yy;
+        return $yy == 0 ? 100 : $yy;
     } else {
         return undef;
     }
@@ -857,7 +870,7 @@ sub _read_C_table {
             my ($tbl, $nval, $val, $nlines, $txt) = split /\s+/, $line, 5;
             $table = sprintf "%06d", $tbl;
             # For tables listed 2 or more times, use last instance only.
-            # This prevents $txt to be duplicated in $C_table{$table}{$value} 
+            # This prevents $txt to be duplicated in $C_table{$table}{$value}
             undef $C_table{$table} if defined $C_table{$table};
             $value = $val+0;
             next if !defined $txt || $txt eq 'NOT DEFINED' || $txt eq 'RESERVED';
@@ -956,6 +969,7 @@ sub fopen {
     my $filename = shift
         or _croak "fopen() called without an argument";
     _croak "File $filename doesn't exist!" unless -e $filename;
+    _croak "$filename is not a plain file" unless -f $filename;
 
     # Open file for reading
     $self->{FILEHANDLE} = new FileHandle;
@@ -1000,21 +1014,22 @@ sub rewind {
     }
     $self->{CURRENT_MESSAGE} = 0;
     $self->{CURRENT_SUBSET} = 0;
+    delete $self->{START_POS};
     delete $self->{POS};
     delete $self->{EOF};
     return 1;
 }
 
 ## Read in next BUFR message from file if $self->{FILEHANDLE} is set,
-## else from $self->{IN_BUFFER} (string argument to constructor). Also
-## decodes section 0 and updates $self->{CURRENT_AHL} if a WMO ahl is
-## found (implemented for file reading only). Sets $self->{POS} to end
-## of BUFR message. Sets $self->{LAST_MESSAGE} if no more 'BUFR' in
-## file or input buffer. Croaks if there are no BUFR messages at all in
-## file/buffer or error in reading BUFR message
+## else from $self->{IN_BUFFER} (string argument to
+## constructor). Decodes section 0 and sets $self->{POS} to end of
+## BUFR message. Through call to _find_next_BUFR, $self->{CURRENT_AHL}
+## is updated if a GTS ahl is found (implemented for file reading
+## only), and $self->{EOF} is set if no more 'BUFR' in
+## file/buffer. Croaks if an error occurs when reading BUFR message.
 
-## Returns BUFR message from section 1 on, BUFR edition, total length
-## of message, and $sec0 (section 0 except 'BUFR' part).
+## Returns BUFR message from section 1 on, or undef if no BUFR message
+## is found.
 sub _read_message {
     my $self = shift;
 
@@ -1023,44 +1038,16 @@ sub _read_message {
     _croak "_read_message: Neither BUFR file nor BUFR text is given"
         unless $filehandle or $in_buffer;
 
-    # According to 2.3.1.1 in part II of Manual On The GTS there are
-    # two possibilities for the starting line of a WMO bulletin
-    my $ahl_regexp = qr{(?:ZCZC|\001\r\r\n) ?\d*\r\r\n(.+)\r\r};
-    $self->{CURRENT_AHL} = undef;
-
     # Locate next 'BUFR' and set $pos to this position in file/string,
-    # also finding last WMO ahl before this (for file only)
-    my $pos = (defined $self->{POS}) ? $self->{POS} : 0;
-    if ($filehandle) {
-        my $oldeol = $/;
-        $/ = 'BUFR';
-        my $slurp = <$filehandle> || '    ';
-        $/ = $oldeol;
-        # If this is first read, check that we really did find 'BUFR'
-        if ($pos == 0 and substr($slurp,-4) ne 'BUFR') {
-            $pos = -1;
-        } else {
-            $pos = tell($filehandle) - 4;
-        }
+    # also finding corresponding GTS ahl ($self->{CURRENT_AHL}) if
+    # exists (for file only). Possibly sets $self->{EOF}
+    my $pos = defined $self->{POS} ? $self->{POS} : 0;
+    $pos = $self->_find_next_BUFR($filehandle, $in_buffer, $pos);
+    return if $pos < 0;
 
-        # Get last WMO ahl (TTAAii CCCC DTG [BBB]) before 'BUFR', if present
-        while ( $slurp =~ /$ahl_regexp/go ) {
-            $self->{CURRENT_AHL} = $1;
-        }
-    } elsif ($in_buffer) {
-        # Locate next 'BUFR' in string argument to constructor
-        $pos = index($in_buffer, 'BUFR', $pos);
-    }
-
-    if ($pos < 0) {
-        # This should only happen if there is no 'BUFR' in file/buffer
-        $self->{EOF} = 1;
-        if ($filehandle) {
-            _croak "No BUFR message in file '$self->{FILENAME}'"
-        } else {
-            _croak "No BUFR message found";
-        }
-    }
+    # Remember start position of BUFR message in case we need to
+    # rewind later because length of BUFR cannot be trusted
+    $self->{START_POS} = $pos;
 
     # Report (if verbose setting) where we found the BUFR message
     $self->_spew(2, "BUFR message at position %d", $pos) if $Spew;
@@ -1068,98 +1055,148 @@ sub _read_message {
     # Read (rest) of Section 0 (length of BUFR message and edition number)
     my $sec0;                   # Section 0 is BUFR$sec0
     if ($filehandle) {
-        if ((read $filehandle, $sec0, 4) != 4) {
+        if ((read $filehandle, $sec0, 8) != 8) {
             $self->{EOF} = 1;
             _croak "Error reading section 0 in file '$self->{FILENAME}', position "
                 . tell($filehandle);
         }
+        $sec0 = substr $sec0, 4;
     } else {
-        if (length($in_buffer) < $pos + 8) {
+        if (length($in_buffer) < $pos+8) {
             $self->{EOF} = 1;
             _croak "Error reading section 0: this is not a BUFR message?"
         }
-        $sec0 = substr $in_buffer, $pos + 4, 4;
+        $sec0 = substr $in_buffer, $pos+4, 4;
     }
+    $self->{SEC0_STREAM}  = "BUFR$sec0";
 
     # Extract length and edition number
     my ($length, $edition) = unpack 'NC', "\0$sec0";
+    $self->{BUFR_LENGTH}  = $length;
+    $self->{BUFR_EDITION} = $edition;
     $self->_spew(2, "Message length: %d, Edition: %d", $length, $edition) if $Spew;
+    if ($edition < 2 || $edition > 4) {
+        $self->{POS} = 4;
+        _croak "Cannot handle BUFR edition $edition"
+    }
 
     # Read rest of BUFR message (section 1-5)
     my $msg;
+    my $msgisOK = 1;
     if ($filehandle) {
         if ((read $filehandle, $msg, $length-8) != $length-8) {
-            $self->{EOF} = 1;
-            _croak "BUFR message truncated or 'BUFR' is not start of "
-                . "a real BUFR message in file '$self->{FILENAME}'";
+            # Probably a corrupt or truncated BUFR message. We choose
+            # to decode as much as possible (maybe the length in
+            # section 0 is all that is wrong), but obviously we cannot
+            # trust the stated length of BUFR message, so reset
+            # position of filehandle to just after section 0
+            $msgisOK = 0;
+            seek $filehandle, $pos+8, 0;
+            $self->_spew(2, "Danger: file '$self->{FILENAME}' not big enough "
+                         . "to contain the stated length of BUFR message");
+            $pos += 8;
+        } else {
+            $pos = tell($filehandle);
         }
-        $pos = tell($filehandle);
     } else {
-        if (length($in_buffer) < $pos + $length) {
-            $self->{EOF} = 1;
-            _croak "BUFR message truncated or 'BUFR' is not start of "
-                . " a real BUFR message";
+        if (length($in_buffer) < $pos+$length) {
+            $msgisOK = 0;
+            $self->_spew(2, "Danger: buffer not big enough "
+                         . "to contain the stated length of BUFR message");
+            $msg = substr $in_buffer, $pos+8, $length-8;
+            $pos += 8;
+        } else {
+            $msg = substr $in_buffer, $pos+8, $length-8;
+            $pos += $length;
         }
-        $msg = substr $in_buffer, $pos + 8, $length - 8;
-        $pos += $length;
     }
-    $self->_spew(2, "Successfully read BUFR message; position now %d", $pos) if $Spew;
+    if ($Spew) {
+        if ($msgisOK) {
+            $self->_spew(2, "Successfully read BUFR message; position now %d", $pos);
+        } else {
+            $self->_spew(2, "Resetting position to %d", $pos);
+        }
+    }
 
-    # Reset $self->{POS} to end of BUFR message
+    # Reset $self->{POS} to end of BUFR message (or after first 8
+    # bytes of truncated/corrupt BUFR message)
     $self->{POS} = $pos;
 
-    # Is this last BUFR message?
-    if (not $self->_find_next_BUFR($filehandle, $in_buffer, $pos)) {
-        $self->_spew(2, "Last BUFR message (reached end of file)") if $Spew;
-        $self->{LAST_MESSAGE} = 1;
-    }
-
-    return ($msg, $edition, $length, $sec0);
+    return $msg;
 }
 
-## See if there is another BUFR message, for easy EOF handling
-## (actually, we only search for another 'BUFR'), returning 1 if there
-## is, else returning 0
+## Advance to first occurrence of 'BUFR', setting $self->{CURRENT_AHL}
+## if a preceding GTS ahl is found (for filehandle only), and
+## returning the new position. If no 'BUFR' is found, sets
+## $self->{EOF} and returns -1.
 sub _find_next_BUFR {
     my $self = shift;
     my ($filehandle, $in_buffer, $pos) = @_;
 
+    # See sub next_observation for the reason behind the unless condition
+    $self->{CURRENT_AHL} = undef unless $self->{USE_PREV_AHL};
+    my $new_pos;
+
     if ($filehandle) {
         my $oldeol = $/;
         $/ = "BUFR";
-        <$filehandle>;
+        my $slurp = <$filehandle> || '    ';
         $/ = $oldeol;
-        if (CORE::eof($filehandle)) {
-            return 0;
+        if (CORE::eof($filehandle) or substr($slurp,-4) ne 'BUFR') {
+            $self->{EOF} = 1;
         } else {
-            # Reset position of filehandle
-            seek $filehandle, $pos, 0;
+            # Get the GTS ahl (TTAAii CCCC DTG [BBB]) before 'BUFR',
+            # if present. BBB=Pxx (segmentation) was allowed until
+            # 2007, but at least one centre still uses PAA as of 2014.
+            # COR shouldn't be allowed (from ?), but is still used
+            my $ahl_regex = qr{[A-Z]{4}\d\d [A-Z]{4} \d{6}( ((RR|CC|AA|PA)[A-Z])| COR)?};
+            # Use '\n+' not '\n' since adding an extra '\n' in bulletin has been seen
+            if ($slurp =~ /(${ahl_regex})\r\r\n+BUFR$/) {
+                $self->{CURRENT_AHL} = $1;
+                $self->_spew(2,"GTS ahl found: %s",$self->{CURRENT_AHL}) if $Spew;
+            }
+            # Reset position of filehandle to just before 'BUFR'
+            seek($filehandle, -4, 1);
+            $new_pos = tell $filehandle;
         }
     } else {
-        my $new_pos = index($in_buffer, 'BUFR', $pos);
+        $new_pos = index($in_buffer, 'BUFR', $pos);
         if ($new_pos < 0) {
-            return 0;
+            $self->{EOF} = 1;
         }
     }
-    return 1;
+
+    if ($self->{EOF}) {
+        if ($pos == 0) {
+            if ($filehandle) {
+                $self->_spew(2,"No BUFR message in file %s",$self->{FILENAME})
+                    if $Spew;
+            } else {
+                $self->_spew(2, "No BUFR message found") if $Spew;
+            }
+        }
+        return -1;
+    }
+
+    undef $self->{USE_PREV_AHL};
+    return $new_pos;
 }
 
+## Decode section 1 to 5. Section 0 is already decoded in _read_message.
 sub _decode_sections {
     my $self = shift;
-    my ($msg, $edition, $length, $sec0) = @_;
-
-    _croak "Cannot handle BUFR edition $edition"
-        if $edition < 2 || $edition > 4;
+    my $msg = shift;
 
     $self->{BUFR_STREAM}  = $msg;
-    $self->{SEC0_STREAM}  = "BUFR$sec0";
     $self->{SEC1_STREAM}  = undef;
     $self->{SEC2_STREAM}  = undef;
     $self->{SEC3_STREAM}  = undef;
     $self->{SEC4_STREAM}  = undef;
     $self->{SEC5_STREAM}  = undef;
-    $self->{BUFR_LENGTH}  = $length;
-    $self->{BUFR_EDITION} = $edition;
+
+    # Breaking the rule that all debugging should be on lines starting
+    # with 'BUFR.pm:', therefore using $verbose=6
+    $self->_spew(6, $self->dumpsection0()) if $Spew;
 
     ##  Decode Section 1 (Identification Section)  ##
 
@@ -1229,8 +1266,9 @@ sub _decode_sections {
         $self->{SECOND}               = $sec1[16];
         $self->{LOCAL_USE}            = $sec1[17] if $sec1[0] > 22;
     }
-    $self->_spew(3, "BUFR edition: %d Optional section: %d Update sequence number: %d",
+    $self->_spew(2, "BUFR edition: %d Optional section: %d Update sequence number: %d",
                 $self->{BUFR_EDITION}, $self->{OPTIONAL_SECTION}, $self->{UPDATE_NUMBER}) if $Spew;
+    $self->_spew(6, $self->dumpsection1()) if $Spew;
 
     $self->_validate_datetime() if ($Strict_checking);
 
@@ -1252,6 +1290,7 @@ sub _decode_sections {
         $self->{SEC2_STREAM} = substr $self->{BUFR_STREAM}, 0, $sec2[0];
         $self->{BUFR_STREAM} = substr $self->{BUFR_STREAM}, $sec2[0];
         $self->{SEC2} = \@sec2;
+        $self->_spew(2, "Length of section 2: %d", $sec2[0]) if $Spew;
     } else {
         $self->{SEC2} = undef;
         $self->{SEC2_STREAM} = undef;
@@ -1280,10 +1319,17 @@ sub _decode_sections {
     $self->{NUM_SUBSETS}      = $sec3[2];
     $self->{OBSERVED_DATA}    = vec($sec3[3] & 0x80,0,1); # extract 1. bit
     $self->{COMPRESSED_DATA}  = vec($sec3[3] & 0x40,1,1); # extract 2. bit
-    $self->_spew(3, "Number of subsets: %d Observed data: %d Compressed data: %d",
+    $self->_spew(2, "Length of section 3: %d", $sec3[0]) if $Spew;
+    $self->_spew(2, "Number of subsets: %d Observed data: %d Compressed data: %d",
                  $self->{NUM_SUBSETS}, $self->{OBSERVED_DATA}, $self->{COMPRESSED_DATA}) if $Spew;
     _complain("Bits 3-8 in octet 7 in section 3 are not 0 (octet 7 = $sec3[3])")
-	if ($Strict_checking and ($sec3[3] & 0x3f) != 0);
+        if ($Strict_checking and ($sec3[3] & 0x3f) != 0);
+    if ($Spew == 6) {
+        my @unexpanded = _int2fxy(unpack 'n*', $self->{SEC3}[4]);
+        $self->{DESCRIPTORS_UNEXPANDED} = @unexpanded ?
+            join(' ', @unexpanded) : '';
+        $self->_spew(6, $self->dumpsection3());
+    }
 
     ##  Decode Section 4 (Data Section)  ##
 
@@ -1295,9 +1341,10 @@ sub _decode_sections {
     # Check that stated length of section 4 makes sense
     _croak "Length of section 4 too small (< 4): $sec4_len"
         if $sec4_len < 4;
-    _croak "Rest of BUFR message shorter (" . length($self->{BUFR_STREAM})
-        . " bytes) than stated length of section 4 ($sec4_len bytes)"
-            if $sec4_len > length($self->{BUFR_STREAM});
+    _croak "Rest of BUFR message (" . length($self->{BUFR_STREAM}) . " bytes)"
+        . " shorter than stated length of section 4 ($sec4_len bytes)."
+        . " Probably the BUFR message is truncated"
+        if $sec4_len > length($self->{BUFR_STREAM});
 
     $self->{SEC4_STREAM}  = substr $self->{BUFR_STREAM}, 0, $sec4_len;
     $self->{SEC4_RAWDATA} = substr $self->{BUFR_STREAM}, 4, $sec4_len-4;
@@ -1327,7 +1374,6 @@ sub _decode_sections {
     return $self;
 }
 
-
 ##  Read next BUFR message and decode. Set $self->{ERROR_IN_MESSAGE} if
 ##  anything goes seriously wrong, so that sub next_observation can use
 ##  this to skip to next message if user chooses to trap the call to
@@ -1339,17 +1385,24 @@ sub _next_message {
 
     $self->{ERROR_IN_MESSAGE} = 0;
 
-    # Read message (note that sub _read_message also detects if this is
-    # last message in file, for which it needs to decode section 0 to
-    # get length of message)
-    my ($msg, $edition, $length, $sec0) = $self->_read_message();
+    my $msg;
+    eval {
+        # Read BUFR message and decode section 0 (needed to get length
+        # of message)
+        $msg = $self->_read_message();
 
-    # Unpack sections
-    eval { $self->_decode_sections($msg, $edition, $length, $sec0) };
+        # Unpack section 1-5
+        $self->_decode_sections($msg) if $msg;
+    };
     if ($@) {
         $self->{ERROR_IN_MESSAGE} = 1;
         die $@;  # Could use croak, but then 2 "at ... line ..."  will
-		 # be printed to STDERR
+                 # be printed to STDERR
+    }
+    if (!$msg) {
+        # Nothing to decode. $self->{EOF} should have been set
+        $self->_spew(2, "No more BUFR messages found") if $Spew;
+        return;
     }
 
     $self->{CURRENT_MESSAGE}++;
@@ -1361,13 +1414,12 @@ sub _next_message {
         $self->{ERROR_IN_MESSAGE} = 1;
         die $@;
     }
-    $self->_spew(2, "BUFR table version is $table_version") if $Spew;
 
     # Get the data descriptors and expand them
     my @unexpanded = _int2fxy(unpack 'n*', $self->{SEC3}[4]);
     _croak "No data description in section 3" if !defined $unexpanded[0];
     $self->{DESCRIPTORS_UNEXPANDED} = join ' ', @unexpanded;
-    $self->_spew(3, "Unexpanded data descriptors: %s", $self->{DESCRIPTORS_UNEXPANDED}) if $Spew;
+    $self->_spew(2, "Unexpanded data descriptors: %s", $self->{DESCRIPTORS_UNEXPANDED}) if $Spew;
 
     $self->_spew(2, "Expanding data descriptors") if $Spew;
     my $alias = "$table_version " . $self->{DESCRIPTORS_UNEXPANDED};
@@ -1402,16 +1454,44 @@ sub _next_message {
 }
 
 ##  Get next observation, i.e. next subset in current BUFR message or
-##  first subset in next message
+##  first subset in next message. Returns (reference to) data and
+##  descriptors, or empty list if no observation is found (in which
+##  case $self->{EOF} should have been set).
 sub next_observation {
     my $self = shift;
 
     $self->_spew(2, "Fetching next observation") if $Spew;
-    # Read next BUFR message, if necessary
-    if ($self->{ERROR_IN_MESSAGE} && $self->{LAST_MESSAGE}) {
-        $self->{EOF} = 1;
-        return;
+
+    # If an error occurred during decoding of previous message, we
+    # don't know if stated length in section 0 is to be trusted,
+    # so rewind to next 'BUFR', or setting EOF if no such exists
+    if ($self->{ERROR_IN_MESSAGE}) {
+        # First rewind to right after 'BUFR' in previous (faulty)
+        # message. We cannot go further if file/buffer starts as
+        # 'BUFRBUFR'
+        my $pos = $self->{START_POS} + 4;
+        seek($self->{FILEHANDLE}, $pos, 0) if $self->{FILEHANDLE};
+        # Then rewind to next 'BUFR'
+        $self->_spew(2, "Error in processing BUFR message (check STDERR for "
+                     . "details), rewinding to next 'BUFR'") if $Spew;
+        my $prev_ahl = $self->{CURRENT_AHL} || '';
+        my $new_pos = $self->_find_next_BUFR($self->{FILEHANDLE},
+                                             $self->{IN_BUFFER}, $pos);
+        if ($self->{EOF}) {
+            $self->_spew(2, "Last BUFR message (reached end of file)") if $Spew;
+            return;
+        } else {
+            $self->{POS} = $new_pos;
+            if ($self->{CURRENT_AHL}
+                && ($self->{CURRENT_AHL} ne $prev_ahl)) {
+                # Mark that CURRENT_AHL should be used next time
+                # _find_next_bufr is called (which will start from 'BUFR')
+                $self->{USE_PREV_AHL} = 1;
+            }
+        }
     }
+
+    # Read next BUFR message
     if ($self->{CURRENT_MESSAGE} == 0
         or $self->{CURRENT_SUBSET} >= $self->{NUM_SUBSETS}
         or $self->{ERROR_IN_MESSAGE}) {
@@ -1434,22 +1514,19 @@ sub next_observation {
         undef $self->{NEW_REFVAL_OF};
         undef $self->{CHANGE_SRW};
         undef $self->{ADD_ASSOCIATED_FIELD};
-        # If _next_message is croaking, what is returned from
-        # next_observation is (mysteriously) what was returned last
-        # time next_observation was called, while this reset (also
-        # mysteriously) prevents that. Anyway, this tidying ought
-        # to be done for other reasons also
         undef $self->{DATA};
         undef $self->{DESC};
+        # Note that we should NOT undef metadata in section 1-3 here,
+        # since if the next call (_next_message) finds no more
+        # messages, we don't want to lose the metadata of the last
+        # valid message extracted. sub join_subsets is based on this
+        # assumption
 
         $self->_next_message();
+        return if $self->{EOF};
     }
 
     $self->{CURRENT_SUBSET}++;
-
-    # Raise a flag if this is the last observation in the last message
-    $self->{EOF} = $self->{LAST_MESSAGE}
-                   && ($self->{CURRENT_SUBSET} >= $self->{NUM_SUBSETS});
 
     # Return references to data and descriptor arrays
     if ($self->{COMPRESSED_DATA}) {
@@ -1480,8 +1557,7 @@ sub dumpsections {
     my $txt;
     if ($current_subset_number == 1) {
         $txt = "\nMessage $current_message_number";
-        $txt .= (defined $current_ahl)
-            ? "  $current_ahl\n" : "\n";
+        $txt .= defined $current_ahl ? "  $current_ahl\n" : "\n";
         $txt .= $self->dumpsection0() . $self->dumpsection1() . $self->dumpsection3();
     }
 
@@ -1503,12 +1579,12 @@ sub dumpsection0 {
     _croak "BUFR object not properly initialized to call dumpsection0. "
         . "Did you forget to call next_observation()?" unless $self->{BUFR_LENGTH};
 
-    my $txt = <<"EOF";
+    my $txt = <<"EOT";
 
 Section 0:
     Length of BUFR message:            $self->{BUFR_LENGTH}
     BUFR edition:                      $self->{BUFR_EDITION}
-EOF
+EOT
     return $txt;
 }
 
@@ -1519,7 +1595,7 @@ sub dumpsection1 {
 
     my $txt;
     if ($self->{BUFR_EDITION} < 4) {
-        $txt = <<"EOF";
+        $txt = <<"EOT";
 
 Section 1:
     Length of section:                 @{[ length $self->{SEC1_STREAM} ]}
@@ -1537,9 +1613,9 @@ Section 1:
     Day:                               $self->{DAY}
     Hour:                              $self->{HOUR}
     Minute:                            $self->{MINUTE}
-EOF
+EOT
     } else {
-        $txt = <<"EOF";
+        $txt = <<"EOT";
 
 Section 1:
     Length of section:                 @{[ length $self->{SEC1_STREAM} ]}
@@ -1559,7 +1635,7 @@ Section 1:
     Hour:                              $self->{HOUR}
     Minute:                            $self->{MINUTE}
     Second:                            $self->{SECOND}
-EOF
+EOT
     }
     # Last part of section 1: "Reserved for local use by ADP centres"
     # is considered so uninteresting (and rare), that it is displayed
@@ -1580,11 +1656,11 @@ sub dumpsection2 {
     _croak "dumpsection2: no code ref provided"
         unless defined $sec2_code_ref && ref($sec2_code_ref) eq 'CODE';
 
-    my $txt = <<"EOF";
+    my $txt = <<"EOT";
 
 Section 2:
     Length of section:                 @{[ length $self->{SEC2_STREAM} ]}
-EOF
+EOT
 
     return $txt . $sec2_code_ref->($self->{SEC2_STREAM}) . "\n";
 }
@@ -1595,7 +1671,7 @@ sub dumpsection3 {
         . "Did you forget to call next_observation()?" unless $self->{SEC3_STREAM};
     $self->{DESCRIPTORS_UNEXPANDED} ||= '';
 
-    my $txt = <<"EOF";
+    my $txt = <<"EOT";
 
 Section 3:
     Length of section:                 @{[ length $self->{SEC3_STREAM} ]}
@@ -1603,7 +1679,7 @@ Section 3:
     Observed data:                     $self->{OBSERVED_DATA}
     Compressed data:                   $self->{COMPRESSED_DATA}
     Data descriptors unexpanded:       $self->{DESCRIPTORS_UNEXPANDED}
-EOF
+EOT
     return $txt;
 }
 
@@ -1623,7 +1699,7 @@ sub dumpsection4 {
                         # for operator descriptors with no data value in
                         # section 4
   ID:
-    foreach my $id ( @{ $descriptors } ) {
+    foreach my $id (@{$descriptors}) {
         my $value = defined $data->[$idx] ? $data->[$idx] : 'missing';
         $idx++;
         if ($id =~ /^205/) {    # Character information operator
@@ -1789,7 +1865,7 @@ sub dumpsection4_with_bitmaps {
     my $idx = 0;
     # Loop over data descriptors
   ID:
-    foreach my $id ( @{ $descriptors } ) {
+    foreach my $id (@{$descriptors}) {
         # Stop printing when the bit map part starts
         last ID if ($id =~ /^22[2-5]/ or $id =~ /^232/);
 
@@ -1937,8 +2013,9 @@ sub _expand_descriptors {
             my $y = substr $descriptor, 3;    # Number of replications
             if ($y > 0) {
                 # Simple replication (replicate next x descriptors y times)
-                _croak "Not enough descriptors following replication "
-                    . "descriptor $descriptor" if $di + $x + 1 > @_;
+                _croak "Cannot expand: Not enough descriptors following "
+                    . "replication descriptor $descriptor (or there is "
+                    . "a problem in nesting of replication)" if $di+$x+1 > @_;
                 my @r = ();
                 push @r, @_[($di+1)..($di+$x)] while --$y;
                 # Recursively expand replicated descriptors $y-1 times
@@ -1949,10 +2026,12 @@ sub _expand_descriptors {
                 # delayed descriptor replication (and data repetition)
                 # factor, i.e. one of 0310(00|01|02|11|12), followed
                 # by the x descriptors to be replicated
-                _croak "Not enough descriptors following delayed replication"
-                    . " descriptor $descriptor" if $di + $x + 1 > @_;
-                _croak "Delayed replication descriptor $descriptor is "
-                    . "not followed by one of 0310(00|01|02|11|12) but by $_[$di+1]"
+                _croak "Cannot expand: Not enough descriptors following delayed"
+                    . " replication descriptor $descriptor (or there is "
+                    . "a problem in nesting of replication)" if $di+$x+1 > @_;
+                _croak "Cannot expand: Delayed replication descriptor "
+                    . "$descriptor is not followed by one of "
+                    . "0310(00|01|02|11|12) but by $_[$di+1]"
                         if $_[$di+1] !~ /^0310(00|01|02|11|12)$/;
                 my @r = @_[($di+2)..($di+$x+1)];
                 # Here we just expand the D descriptors in the
@@ -1963,8 +2042,8 @@ sub _expand_descriptors {
                 @s = _expand_descriptors($D_table, @r) if @r;
                 # Must adjust x since replicated descriptors might have been expanded
                 substr($_[$di], 1, 2) = sprintf "%02d", scalar @s;
-                push @expanded, @_[$di, $di+1], @s;
-                $di += 1 + $x; # NOTE: 1 is added to $di on next iteration
+                push @expanded, @_[$di,$di+1], @s;
+                $di += 1+$x; # NOTE: 1 is added to $di on next iteration
             }
             next;
         } elsif ($f == 3) {
@@ -2019,7 +2098,7 @@ sub resolve_descriptor {
 
     if ($how eq 'simply' or $how eq 'partially') {
         my @expanded;
-        foreach my $id ( @desc ) {
+        foreach my $id (@desc) {
             my $f = substr $id, 0, 1;
             if ($f == 3) {
                 _croak "$id is not in table D, unable to expand"
@@ -2039,12 +2118,12 @@ sub resolve_descriptor {
         if (@desc == 1 and $desc[0] =~ /^1/) {
             # This is simply a replication descriptor; do not try to expand
         } else {
-            @desc = _expand_descriptors( $D_table, @desc );
+            @desc = _expand_descriptors($D_table, @desc);
         }
     }
 
     my $count = 0;
-    foreach my $id ( @desc ) {
+    foreach my $id (@desc) {
         if ($id =~ /^[123]/) {
             $txt .= sprintf "    %06d\n", $id;
         } elsif ($B_table->{$id}) {
@@ -2290,7 +2369,7 @@ sub _decode_bitstream {
                 my $bm_idesc;
                 ($pos, $flow, $bm_idesc, @operators)
                     = $self->_apply_operator_descriptor($id, $x, $y, $pos, $isub,
-                                                        $desc[$idesc + 1], @operators);
+                                                        $desc[$idesc+1], @operators);
                 if ($flow eq 'redo_bitmap') {
                     # Data value is associated with the descriptor
                     # defined by bit map. Remember original and new
@@ -2383,7 +2462,7 @@ sub _decode_bitstream {
                 my $value = bitstream2dec($bitstream, $pos, $width);
                 # All bits set to 1 for associated field is NOT
                 # interpreted as missing value
-		$value = 2**$width - 1 if ! defined $value;
+                $value = 2**$width - 1 if ! defined $value;
                 $pos += $width;
                 push @{$subset_desc[$isub]}, 999999;
                 push @{$subset_data[$isub]}, $value;
@@ -2530,8 +2609,7 @@ sub _decode_bitstream {
 
     $self->{DATA} = \@subset_data;
     $self->{DESC} = \@subset_desc;
-
-    return $self->{DATA};
+    return;
 }
 
 ## Decode bitstream (data part of section 4 encoded using BUFR
@@ -2647,7 +2725,7 @@ sub _decompress_bitstream {
             my $bm_idesc;
             ($pos, $flow, $bm_idesc, @operators)
                 = $self->_apply_operator_descriptor($id, $x, $y, $pos, 0,
-                                                    $desc[$idesc + 1], @operators);
+                                                    $desc[$idesc+1], @operators);
             if ($flow eq 'redo_bitmap') {
                 # Data value is associated with the descriptor
                 # defined by bit map. Remember original and new
@@ -2781,8 +2859,7 @@ sub _decompress_bitstream {
 
     $self->{DATA} = \@subset_data;
     $self->{DESC} = \@desc_exp;
-
-    return $self->{DATA};
+    return;
 }
 
 ## Extract the data values for descriptor $id (with index $idesc in
@@ -2887,7 +2964,8 @@ sub _extract_compressed_value {
             # to 94.6.3 (2) (i) in FM 94 BUFR, the first value for
             # character data shall be set to all bits zero
             my $nbytes = $width/8;
-            _complain("CCITTIA5 minval not all bits set to zero but '$minval'")
+            _complain("Local reference value for compressed CCITTIA5 data "
+                      . "hasn't all bits set to zero, but is '$minval'")
                 if $Strict_checking and $minval ne "\0" x $nbytes;
             my $incr_values;
             foreach my $isub (1..$nsubsets) {
@@ -2907,7 +2985,7 @@ sub _extract_compressed_value {
         } else {
             # If min value is defined => All subsets set to min value
             # If min value is undefined => Data in all subsets are undefined
-            my $value = (defined $minval) ? $minval : undef;
+            my $value = defined $minval ? $minval : undef;
             # Trim string, also removing nulls
             $value = _trim($value, $id);
             foreach my $isub (1..$nsubsets) {
@@ -2916,8 +2994,8 @@ sub _extract_compressed_value {
             $pos += $nsubsets*8*$deltabytes;
         }
         $self->_spew(3, "  %s", join ',',
-                     map { defined($subset_data_ref->[$_][-1]) ?
-                               $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets) if $Spew;
+             map { defined($subset_data_ref->[$_][-1]) ?
+                 $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets) if $Spew;
     } else {
         # Extract minimum value
         my $minval = bitstream2dec($bitstream, $pos, $width);
@@ -2956,7 +3034,7 @@ sub _extract_compressed_value {
         } else {
             # If minimum value is defined => All subsets set to minimum value
             # If minimum value is undefined => Data in all subsets are undefined
-            my $value = (defined $minval) ? $minval*$scale_factor : undef;
+            my $value = defined $minval ? $minval*$scale_factor : undef;
             # Exception: all bits set to 1 for associated field is NOT
             # interpreted as missing value
             if ($id == 999999 and ! defined $value) {
@@ -3014,8 +3092,8 @@ sub _extract_compressed_value {
             }
         }
         $self->_spew(3, "  %s", join ' ',
-                     map { defined($subset_data_ref->[$_][-1]) ?
-                     $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets) if $Spew;
+             map { defined($subset_data_ref->[$_][-1]) ?
+                 $subset_data_ref->[$_][-1] : 'missing'} 1..$nsubsets) if $Spew;
     }
     return $pos;
 }
@@ -3055,8 +3133,8 @@ sub reencode_message {
         delete $self->{LOCAL_USE};
 
         # Extract section 0 info
-        $i++ while $lines[$i] !~ /^Section 0/ and $i < @lines - 1;
-        last MESSAGE if $i >= @lines - 1; # Not containing any decoded BUFR message
+        $i++ while $lines[$i] !~ /^Section 0/ and $i < @lines-1;
+        last MESSAGE if $i >= @lines-1; # Not containing any decoded BUFR message
         $i++; # Skip length of BUFR message
         ($self->{BUFR_EDITION}) = $lines[++$i]
             =~ /BUFR edition:\s+(\d+)/;
@@ -3154,7 +3232,7 @@ sub reencode_message {
         # Extract data values to use in section 4
         my ($data_refs, $desc_refs);
         my $subset = 0;
-      SUBSET: while ($i < @lines - 1) {
+      SUBSET: while ($i < @lines-1) {
             $_ = $lines[++$i];
             next SUBSET if /^$/ or /^Subset/;
             last SUBSET if /^Message/;
@@ -3250,7 +3328,7 @@ sub _encode_sec1 {
     my $sec1_stream;
     # Byte 4-
     if ($bufr_edition < 4) {
-        $self->{LOCAL_USE} = "\0" if not exists $self->{LOCAL_USE};
+        $self->{LOCAL_USE} = "\0" if !defined $self->{LOCAL_USE};
         $sec1_stream = pack 'C14a*',
             $self->{MASTER_TABLE},
             $self->{SUBCENTRE},
@@ -3284,10 +3362,9 @@ sub _encode_sec1 {
             $self->{DAY},
             $self->{HOUR},
             $self->{MINUTE},
-            $self->{SECOND},
-            $self->{LOCAL_USE};
+            $self->{SECOND};
         $sec1_stream .= pack 'a*', $self->{LOCAL_USE}
-            if exists $self->{LOCAL_USE};
+            if defined $self->{LOCAL_USE};
     }
 
     my $sec1_len = 3 + length $sec1_stream;
@@ -3381,7 +3458,7 @@ sub _encode_sec4 {
             . "to encode_message()"
                 unless @$desc_refs == $nsubsets + 1;
 
-    my ($bitstream, $byte_len) = ( $self->{COMPRESSED_DATA} )
+    my ($bitstream, $byte_len) = $self->{COMPRESSED_DATA}
         ? $self->_encode_compressed_bitstream($data_refs, $desc_refs)
             : $self->_encode_bitstream($data_refs, $desc_refs);
 
@@ -3445,7 +3522,7 @@ sub encode_nil_message {
 sub _encode_nil_sec4 {
     my $self = shift;
     my ($stationid_ref, $delayed_repl_ref) = @_;
-    my @delayed_repl = (defined $delayed_repl_ref) ? @$delayed_repl_ref : ();
+    my @delayed_repl = defined $delayed_repl_ref ? @$delayed_repl_ref : ();
 
     # Get the expanded list of descriptors (i.e. expanded with table D)
     if (not $self->{DESCRIPTORS_EXPANDED}) {
@@ -3522,7 +3599,7 @@ sub _encode_nil_sec4 {
             }
 
         } elsif ($f == 2) {
-            my $next_id = $desc[$idesc + 1];
+            my $next_id = $desc[$idesc+1];
             my $flow;
             my $bm_idesc;
             ($pos, $flow, $bm_idesc, @operators)
@@ -3564,14 +3641,14 @@ sub _encode_nil_sec4 {
             if ($unit eq 'CCITTIA5') {
                 # Encode ASCII string in $width bits (left justified,
                 # padded with spaces)
-                my $num_bytes = int ($width/8);
+                my $num_bytes = int($width/8);
                 _croak "Ascii string too long to fit in $width bits: $value"
                     if length($value) > $num_bytes;
                 $value .= ' ' x ($num_bytes - length($value));
                 ascii2bitstream($value, $bitstream, $pos, $num_bytes);
             } else {
                 # Encode value as integer in $width bits
-                $value = int( $value * $scale_factor - $refval + 0.5 );
+                $value = int($value * $scale_factor - $refval + 0.5);
                 _croak "Data value no $id is negative: $value"
                     if $value < 0;
                 dec2bitstream($value, $bitstream, $pos, $width);
@@ -3584,7 +3661,7 @@ sub _encode_nil_sec4 {
 
     # Pad with 0 bits if necessary to get an even or integer number of
     # octets, depending on bufr edition
-    my $padnum = ($self->{BUFR_EDITION} < 4) ? (16-($pos%16)) % 16 : (8-($pos%8)) % 8;
+    my $padnum = $self->{BUFR_EDITION} < 4 ? (16-($pos%16)) % 16 : (8-($pos%8)) % 8;
     if ($padnum > 0) {
         null2bitstream($bitstream, $pos, $padnum);
     }
@@ -3700,7 +3777,7 @@ sub _encode_bitstream {
                 my $bm_idesc;
                 ($pos, $flow, $bm_idesc, @operators)
                     = $self->_apply_operator_descriptor($id, $x, $y, $pos, $isub,
-                                                        $desc[$idesc + 1], @operators);
+                                                        $desc[$idesc+1], @operators);
                 if ($flow eq 'redo_bitmap') {
                     # Data value is associated with the descriptor
                     # defined by bit map. Remember original and new
@@ -3916,7 +3993,7 @@ sub _encode_bitstream {
         # Encode value as integer in $width bits
         _croak "Value '$value' is not a number for descriptor $id"
             unless looks_like_number($value);
-        $value = int( $value * $powers_of_ten[$scale] - $refval + 0.5 );
+        $value = int($value * $powers_of_ten[$scale] - $refval + 0.5);
         _croak "Encoded data value for $id is negative: $value" if $value < 0;
         _croak "Encoded data value for $id is too big to fit in $width bits: $value"
             if $value > 2**$width - 1;
@@ -3940,7 +4017,7 @@ sub _encode_bitstream {
 
     # Pad with 0 bits if necessary to get an even or integer number of
     # octets, depending on bufr edition
-    my $padnum = ($self->{BUFR_EDITION} < 4) ? (16-($pos%16)) % 16 : (8-($pos%8)) % 8;
+    my $padnum = $self->{BUFR_EDITION} < 4 ? (16-($pos%16)) % 16 : (8-($pos%8)) % 8;
     if ($padnum > 0) {
         null2bitstream($bitstream, $pos, $padnum);
     }
@@ -4035,7 +4112,7 @@ sub _encode_value {
         # Encode value as integer in $width bits
         _croak "Value '$value' is not a number for descriptor $id"
             unless looks_like_number($value);
-        $value = int( $value * $powers_of_ten[$scale] - $refval + 0.5 );
+        $value = int($value * $powers_of_ten[$scale] - $refval + 0.5);
         _croak "Encoded data value for $id is negative: $value" if $value < 0;
         _croak "Encoded data value for $id is too big to fit in $width bits: $value"
             if $value > 2**$width - 1;
@@ -4131,7 +4208,7 @@ sub _encode_compressed_value {
     my @values;
     my $first_value = $data_refs->[1][$idesc];
     my $all_equal = 1;        # Set to 0 if at least 2 elements differ
-    foreach my $value ( map { $data_refs->[$_][$idesc] } 2..$nsubsets ) {
+    foreach my $value (map { $data_refs->[$_][$idesc] } 2..$nsubsets) {
         if (defined $value && $unit ne 'CCITTIA5' && !looks_like_number($value)) {
             _croak "Value '$value' is not a number for descriptor $id"
         }
@@ -4152,7 +4229,7 @@ sub _encode_compressed_value {
         } elsif ($unit eq 'CCITTIA5') {
             push @values, $value;
         } else {
-            push @values, int( $value * $powers_of_ten[$scale] - $refval + 0.5 );
+            push @values, int($value * $powers_of_ten[$scale] - $refval + 0.5);
         }
         # Check for illegal flag value
         if ($Strict_checking and $unit =~ /^FLAG[ ]?TABLE/ and $width > 1) {
@@ -4180,7 +4257,7 @@ sub _encode_compressed_value {
                 # Encode value as integer in $width bits
                 _croak "First value '$first_value' is not a number for descriptor $id"
                     unless looks_like_number($first_value);
-                $first_value = int( $first_value * $powers_of_ten[$scale] - $refval + 0.5 );
+                $first_value = int($first_value * $powers_of_ten[$scale] - $refval + 0.5);
                 _croak "Encoded data value for $id is negative: $first_value"
                     if $first_value < 0;
                 _croak "Encoded data value for $id is too big to fit "
@@ -4222,8 +4299,8 @@ sub _encode_compressed_value {
         } else {
             _croak "First value '$first_value' is not a number for descriptor $id"
                 if defined($first_value) && !looks_like_number($first_value);
-            unshift @values, (defined $first_value)
-                ? int( $first_value * $powers_of_ten[$scale] - $refval + 0.5 )
+            unshift @values, defined $first_value
+                ? int($first_value * $powers_of_ten[$scale] - $refval + 0.5)
                     : undef;
             # Numeric data. First find minimum value
             my ($min_value, $isub) = _minimum(\@values);
@@ -4372,7 +4449,7 @@ sub _encode_compressed_bitstream {
             my $bm_idesc;
             ($pos, $flow, $bm_idesc, @operators)
                 = $self->_apply_operator_descriptor($id, $x, $y, $pos, 0,
-                                                    $desc[$idesc + 1], @operators);
+                                                    $desc[$idesc+1], @operators);
             if ($flow eq 'redo_bitmap') {
                 # Data value is associated with the descriptor
                 # defined by bit map. Remember original and new
@@ -4559,7 +4636,7 @@ sub _encode_compressed_bitstream {
 
     # Pad with 0 bits if necessary to get an even or integer number of
     # octets, depending on bufr edition
-    my $padnum = ($self->{BUFR_EDITION} < 4) ? (16-($pos%16)) % 16 : (8-($pos%8)) % 8;
+    my $padnum = $self->{BUFR_EDITION} < 4 ? (16-($pos%16)) % 16 : (8-($pos%8)) % 8;
     if ($padnum > 0) {
         null2bitstream($bitstream, $pos, $padnum);
     }
@@ -4614,7 +4691,11 @@ sub _trim {
         _complain("Nulls (" . '\0'
                   . ") found in string '$str2' for descriptor $id");
         $str =~ s/\0//g;
+    } elsif ($Strict_checking && $str =~/^ +$/) {
+        _complain("Only spaces ('$str') found for descriptor $id, "
+                  . "ought to have been encoded as missing value ");
     }
+
     $str =~ s/\s+$//;
     $str =~ s/^\s+//;
 
@@ -4654,10 +4735,10 @@ sub _trimpad {
 sub _validate_datetime {
     my $self = shift;
     my $bufr_edition = $self->{BUFR_EDITION};
-    my $year = ($bufr_edition < 4) ? $self->{YEAR_OF_CENTURY} + 2000
-                                   : $self->{YEAR};
+    my $year = $bufr_edition < 4 ? $self->{YEAR_OF_CENTURY} + 2000
+                                 : $self->{YEAR};
     my $month = $self->{MONTH} - 1;
-    my $second = ($bufr_edition == 4) ? $self->{SECOND} : 0;
+    my $second = $bufr_edition == 4 ? $self->{SECOND} : 0;
 
     # All datetime variables set to 0 should be considered ok
     return if ($self->{MINUTE} == 0 && $self->{HOUR} == 0
@@ -4683,7 +4764,7 @@ sub _get_number_of_bits_to_store {
         $i++;
         $x *= 2;
     }
-    return ($x == $n )? $i + 1 : $i;
+    return $x==$n ? $i+1 : $i;
 }
 
 ## Find minimum value among set of numbers (undefined values
@@ -4875,7 +4956,7 @@ sub _apply_operator_descriptor {
         # Substituted values follow, each one following a descriptor 223255.
         # Which value they are a substitute for is defined by a bit map, which
         # already may have been defined (if descriptor 23700 is encountered),
-        # or will shortly be defined by data present descriptors (031031)
+        # or will shortly be defined by data present indicators (031031)
         push @{ $self->{BITMAP_OPERATORS} }, '223000';
         $self->{NUM_BITMAPS}++;
         # Mark that a bit map probably needs to be built
@@ -4950,7 +5031,7 @@ sub _apply_operator_descriptor {
         # Replaced/retained values follow, each one following a descriptor 232255.
         # Which value they are a replacement for is defined by a bit map, which
         # already may have been defined (if descriptor 23700 is encountered),
-        # or will shortly be defined by data present descriptors (031031)
+        # or will shortly be defined by data present indicators (031031)
         push @{ $self->{BITMAP_OPERATORS} }, '232000';
         $self->{NUM_BITMAPS}++;
         # Mark that a bit map probably needs to be built
@@ -5054,6 +5135,7 @@ sub join_subsets {
         if (!exists $subset_list[$i]) { # grab all subsets from this object
             while (not $bufr[$i]->eof()) {
                 my ($data, $descriptors) = $bufr[$i]->next_observation();
+                last if !$data;
                 $self->_spew(2, "Joining subset $isub from bufr object $i") if $Spew;
                 $data_refs->[$n] = $data;
                 $desc_refs->[$n++] = $descriptors;
@@ -5063,9 +5145,11 @@ sub join_subsets {
             my $num_found = 0;
             while (not $bufr[$i]->eof()) {
                 my ($data, $descriptors) = $bufr[$i]->next_observation();
+                last if !$data;
                 my $index = _get_index_in_list($subset_list[$i], $isub);
                 if (defined $index) {
-                    $self->_spew(2, "Joining subset $isub from bufr object $i") if $Spew;
+                    $self->_spew(2, "Joining subset $isub from subset $index"
+                                 . " in bufr object $i") if $Spew;
                     $data_refs->[$n + $index] = $data;
                     $desc_refs->[$n + $index] = $descriptors;
                     $num_found++;
@@ -5096,7 +5180,9 @@ Geo::BUFR - Perl extension for handling of WMO BUFR files.
 
 =head1 SYNOPSIS
 
-  # A simple program to print decoded content of a BUFR file
+  # A simple program to print decoded content of a BUFR file. Note
+  # that a more sophisticated program (bufrread.pl) is included in the
+  # package
 
   use Geo::BUFR;
 
@@ -5104,14 +5190,11 @@ Geo::BUFR - Perl extension for handling of WMO BUFR files.
 
   my $bufr = Geo::BUFR->new();
 
-  # If you want flag and code table values to be resolved
-  $bufr->load_Ctable('your favourite C table');
-
-  $bufr->fopen('BUFR file');
+  $bufr->fopen('name of BUFR file');
 
   while (not $bufr->eof()) {
       my ($data, $descriptors) = $bufr->next_observation();
-      print $bufr->dumpsections($data, $descriptors);
+      print $bufr->dumpsections($data, $descriptors) if $data;
   }
 
   $bufr->fclose();
@@ -5136,9 +5219,10 @@ of use. For the majority of potential users of Geo::BUFR I would
 expect these programs to be all that you will need Geo::BUFR for.
 
 Note that being Perl, this module cannot compete in speed with for
-example the (free) ECMWF Fortran library libbufr. Still, some effort
-has been put into making the module reasonable fast in that the core
-routines for encoding and decoding bitstreams are implemented in C.
+example the (free) ECMWF BUFRDC Fortran library. Still, some effort
+has been invested in making the module reasonable fast in that the
+core routines for encoding and decoding bitstreams are implemented in
+C.
 
 
 =head1 METHODS
@@ -5228,16 +5312,22 @@ also be decoded, whose content is then available through the access
 methods listed below. This is the main BUFR decoding routine in
 Geo::BUFR, and will call C<load_BDtables()> internally, but not
 C<load_Ctable>. Consult L</DECODING/ENCODING> if you want more precise
-info about what is returned in $data and $descriptors.
-
+info about what is returned in $data and $descriptors. If there are no
+more BUFR messages in file/input buffer, C<next_observation> will
+return the empty list (so both $data and $descriptors will be undef),
+and a call to get_current_subset_number() will return 0. For the
+special case of a BUFR message with 0 subsets, $data and $descriptors
+will again be undef, while get_current_subset_number() will return 1
+after a call to C<next_observation>. A bit weird perhaps, but then
+this is a really weird kind of BUFR message to handle!
 
 Print the content of a subset in BUFR message:
 
   print $bufr->dumpsections($data,$descriptors,$options);
 
 $options is optional. If this is first subset in message, will start
-by printing message number and, if this is first message in a WMO
-bulletin, WMO ahl (abbreviated header line), as well as content of
+by printing message number and, if this is first message in a GTS
+bulletin, AHL (Abbreviated Header Line), as well as content of
 sections 0, 1 and 3. For section 4, will also print subset
 number. $options should be an anonymous hash with possible keys
 'width' and 'bitmap', e.g. { width => 20, bitmap => 0 }. 'bitmap'
@@ -5298,15 +5388,16 @@ of output.
 
 Set verbose level:
 
-  Geo::BUFR->set_verbose($level); # 0 <= $level <= 5
+  Geo::BUFR->set_verbose($level); # 0 <= $level <= 6
   $bufr->set_verbose($level);
 
 Some info about what is going on in Geo::BUFR will be printed to
 STDOUT if $level > 0. With $level set to 1, all that is printed is the
-B, C and D tables used (with full path). Setting verbose level > 1
-might be especially helpful when debugging, or for example if you want
-to extract as much information as possible from an incorrectly
-formatted BUFR message.
+B, C and D tables used (with full path). Each line of verbose output
+starts with 'BUFR.pm: ', except for the level 6 specific
+output. Setting verbose level > 1 might be helpful when debugging, or
+for example if you want to extract as much information as possible
+from an incorrectly formatted BUFR message.
 
 No decoding of quality information:
 
@@ -5362,7 +5453,7 @@ Get current message number:
 
   $message_no = $bufr->get_current_message_number();
 
-Get last WMO abbreviated header line (ahl) before current message
+Get last Abbreviated Header Line (ahl) before current message
 (undef if not present):
 
   $message_ahl = $bufr->get_current_ahl();
@@ -5704,6 +5795,10 @@ Null characters in CCITTIA5 data (Note (4) to Table B in FM 94 BUFR)
 
 =item *
 
+Missing CCITTIA5 value encoded as spaces
+
+=item *
+
 Invalid date and/or time in section 1
 
 =item *
@@ -5749,10 +5844,10 @@ Pål Sannes E<lt>pal.sannes@met.noE<gt>
 =head1 CREDITS
 
 I am very grateful to Alvin Brattli, who (while employed as a
-researcher at met.no) wrote the first version of this module, with the
-sole purpose of being able to decode some very specific BUFR satellite
-data, but still provided the main framework upon which this module is
-built.
+researcher at the Norwegian Metorological Institute) wrote the first
+version of this module, with the sole purpose of being able to decode
+some very specific BUFR satellite data, but still provided the main
+framework upon which this module is built.
 
 =head1 SEE ALSO
 

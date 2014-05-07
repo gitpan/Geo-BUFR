@@ -1,5 +1,5 @@
 
-Message 6  IOZX11 LFVW 060000 CCE
+Message 6  IOZX11 XXXX 060000 CCE
 
 Section 0:
     Length of BUFR message:            386
@@ -159,7 +159,7 @@ Subset 1
    126  025028          missing  OPERATOR OR MANUFACTURER DEFINED PARAMETER [NUMERIC]
    127  025028          missing  OPERATOR OR MANUFACTURER DEFINED PARAMETER [NUMERIC]
 
-Message 8  IOZX11 LFVW 060300 CCA
+Message 8  IOZX11 XXXX 060300 CCA
 
 Section 0:
     Length of BUFR message:            562
@@ -449,7 +449,7 @@ Subset 2
    126  025028          missing  OPERATOR OR MANUFACTURER DEFINED PARAMETER [NUMERIC]
    127  025028          missing  OPERATOR OR MANUFACTURER DEFINED PARAMETER [NUMERIC]
 
-Message 10  IOZX11 LFVW 052100 CCU
+Message 10  IOZX11 XXXX 052100 CCU
 
 Section 0:
     Length of BUFR message:            346

@@ -1,5 +1,12 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.26 2014-05-07
+- For BUFR messages with errors, start searching for next BUFR message
+  right after 'BUFR' (length in section 0 should not be trusted).
+- No BUFR message in file is no longer considered an error.
+- Strict checking for missing CCITTIA5 value encoded as spaces.
+- New verbose level 6 (useful for inspecting BUFR messages with errors).
+
 1.25 2013-09-13
 - Supporting data description operators 232000 and 232225.
 
@@ -15,8 +22,8 @@ Revision history for Perl extension Geo::BUFR.
 1.22 2013-04-03
 - Format of ECMWF tables version 15-17 changed slightly from previous
   versions, requiring some changes in processing.
-- Added strict checking for value encoded using BUFR compression which
-  would be too big to encode without compression.
+- Strict checking for value encoded using BUFR compression which would
+  be too big to encode without compression.
 - Had to change a test script because newer versions of perl might add
   a '.' to end of warning/error messages.
 
@@ -78,7 +85,7 @@ Revision history for Perl extension Geo::BUFR.
 
 1.1   2010-04-09
 - Resolving of flag values fixed to work for big endian platforms.
-- Scaling of values fetched from bitstream transfered from BUFR.xs
+- Scaling of values fetched from bitstream transferred from BUFR.xs
   to BUFR.pm, resulting in new signature for method bitstream2dec.
 
 1.0 2010-04-06

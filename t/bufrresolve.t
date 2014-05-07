@@ -7,7 +7,7 @@ use Config;
 
 my $perl = $Config{perlpath};
 
-# bufrresolve.pl uses [BD]0000000000000014000 as default, but this is not included in bt/
+# bufrresolve.pl uses [BD]0000000000000019000 as default, but this is not included in bt/
 my $bt = 'B0000000000098013001';
 
 my $output = `$perl ./bufrresolve.pl 307080 -t t/bt --bufrtable $bt`;
@@ -37,6 +37,7 @@ is($output, $expected, 'testing bufrresolve.pl -c -f on flag table');
 $output = `$perl ./bufrresolve.pl --code 008042 --flag 3 -t t/bt -b $bt`;
 $expected = read_file( 't/illegal_flag.txt' ) ;
 is($output, $expected, 'testing bufrresolve.pl -c -f on illegal flag');
+
 
 
 

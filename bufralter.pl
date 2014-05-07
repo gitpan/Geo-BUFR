@@ -418,7 +418,7 @@ additional info.
                              decoded/encoded.
    --tablepath <path to BUFR tables>
                     Set path to BUFR tables (overrides $ENV{BUFR_TABLES})
-   --verbose n      Set verbose level to n, 0<=n<=5 (default 0). Verbose
+   --verbose n      Set verbose level to n, 0<=n<=6 (default 0). Verbose
                     output is sent to STDOUT, so ought to be combined with
                     option --outfile
    --help           Display Usage and explain the options used. Almost
