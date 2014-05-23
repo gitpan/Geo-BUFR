@@ -35,7 +35,7 @@ my %option = ();
 GetOptions(
            \%option,
            'tablepath=s',# Set BUFR table path
-           'code=s',     # Print the content of code table
+           'code=s',     # Print the contents of code table
            'flag=i',     # Resolve the flag value given
            'help',       # Print help information and exit
            'noexpand',   # Don't expand D descriptors
@@ -128,18 +128,18 @@ if (defined $option{code}) {
      [--partial]
      [--simple]
      [--noexpand]
-     [--bufrtable <name of BUFR B or D table]
+     [--bufrtable <name of BUFR B table]
      [--tablepath <path to BUFR tables>]
      [--verbose n]
      [--help]
 
-  2) bufrresolve.pl --code <code_table>
-     [--bufrtable <name of BUFR B or D table>]
+  2) bufrresolve.pl --code <code or flag table>
+     [--bufrtable <name of BUFR B table>]
      [--tablepath <path to BUFR tables>]
      [--verbose n]
 
-  3) bufrresolve.pl --flag <value> --code <flag_table>
-     [--bufrtable <name of BUFR B or D table]
+  3) bufrresolve.pl --flag <value> --code <flag table>
+     [--bufrtable <name of BUFR B table]
      [--tablepath <path to BUFR tables>]
      [--verbose n]
 
@@ -152,11 +152,11 @@ additional info. See also L</https://wiki.met.no/bufr.pm/start> for
 examples of use.
 
 It is supposed that the code and flag tables are contained in a file
-with same name as corresponding B and D tables except for having
-prefix C instead of B or D. The tables used can be chosen by the user
-with options C<--bufrtable> and C<--tablepath>. Default is the hard
-coded DEFAULT_TABLE in directory DEFAULT_TABLE_PATH, but this last one
-will be overriden if the environment variable BUFR_TABLES is set. You
+with same name as corresponding B table except for having prefix C
+instead of B. The tables used can be chosen by the user with options
+C<--bufrtable> and C<--tablepath>. Default is the hard coded
+DEFAULT_TABLE in directory DEFAULT_TABLE_PATH, but this last one will
+be overriden if the environment variable BUFR_TABLES is set. You
 should consider edit the source code if you are not satisfied with the
 defaults chosen.
 
@@ -179,10 +179,11 @@ descriptors, with name, unit, scale, reference value and width (in
 bits) written on each line (except for --simple). --partial, --simple
 and --noexpand are mutually exclusive (full expansion is default).
 
-Usage 2): Prints the content of code or flag table <code_table>.
+Usage 2): Prints the contents of the requested code or flag table
+(named by the table B descriptor).
 
-Usage 3): Displays the bits set for flag value <value> in flag table
-<flag_table>.
+Usage 3): Displays the bits set when the data value for the requested
+flag table is <value>.
 
 Options may be abbreviated, e.g. C<--h> or C<-h> for C<--help>
 

@@ -281,7 +281,7 @@ sub param {
 
 # Filter routines
 
-# Read in content of $filter_file into variables @fid, @fiv,
+# Read in contents of $filter_file into variables @fid, @fiv,
 # @num_desc, @num_val and $num_criteria, which are defined above.
 sub read_filter_file {
     my $filter_file = shift;

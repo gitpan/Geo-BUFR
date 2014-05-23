@@ -1,5 +1,9 @@
 Revision history for Perl extension Geo::BUFR.
 
+1.27 2014-05-23
+- Bugfix for data description operator 237000.
+- Strict checking for 0 subsets.
+
 1.26 2014-05-07
 - For BUFR messages with errors, start searching for next BUFR message
   right after 'BUFR' (length in section 0 should not be trusted).

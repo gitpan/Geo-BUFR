@@ -361,8 +361,7 @@ sub set_bufr_edition {
 Will alter the BUFR messages in <bufr file> according to what is
 specified by the options provided. The modified file (text surrounding
 the BUFR messages will not be affected) will be printed to STDOUT
-(unless C<--outfile> is set). None of the options (except --remove_sec2)
-will affect the content of optional sections if present.
+(unless C<--outfile> is set).
 
 Execute without arguments for Usage, with option C<--help> for some
 additional info.
@@ -406,7 +405,7 @@ additional info.
    --observed 0|1   Set observed data in section 3 to 0 or 1
    --compress 0|1   Set compression in section 3 to 0 or 1
    --remove_sec2    Remove optional section 2 if present
-   --remove_qc      Remove all quality information,
+   --remove_qc      Remove all quality control information,
                     i.e. remove all descriptors from 222000 on
    --outfile <filename>
                     Will print to <filename> instead of STDOUT

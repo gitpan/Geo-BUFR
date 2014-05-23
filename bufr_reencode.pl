@@ -107,7 +107,7 @@ additional info.
 =head1 OPTIONS
 
 Bufr_reencode.pl will create BUFR message(s) printed to STDOUT from
-content of input file, which should match exactly what you would get
+contents of input file, which should match exactly what you would get
 by running bufrread.pl on the final BUFR message(s).
 
 Normal use:

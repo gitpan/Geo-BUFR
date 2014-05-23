@@ -93,7 +93,7 @@ use Time::Local qw(timegm);
 
 require DynaLoader;
 our @ISA = qw(DynaLoader);
-our $VERSION = '1.26';
+our $VERSION = '1.27';
 
 # This loads BUFR.so, the compiled version of BUFR.xs, which
 # contains bitstream2dec, bitstream2ascii, dec2bitstream,
@@ -231,7 +231,7 @@ sub new {
     return $self;
 }
 
-## Copy content of the bufr object in first argument. With no extra
+## Copy contents of the bufr object in first argument. With no extra
 ## arguments, will copy (clone) everything. With 'metadata' as second
 ## argument, will copy just the metadata in section 0, 1 and 3 (and
 ## all of section 2 if present)
@@ -1148,8 +1148,8 @@ sub _find_next_BUFR {
             # Get the GTS ahl (TTAAii CCCC DTG [BBB]) before 'BUFR',
             # if present. BBB=Pxx (segmentation) was allowed until
             # 2007, but at least one centre still uses PAA as of 2014.
-            # COR shouldn't be allowed (from ?), but is still used
-            my $ahl_regex = qr{[A-Z]{4}\d\d [A-Z]{4} \d{6}( ((RR|CC|AA|PA)[A-Z])| COR)?};
+            # COR and RTD shouldn't be allowed (from ?), but are still used
+            my $ahl_regex = qr{[A-Z]{4}\d\d [A-Z]{4} \d{6}( ((RR|CC|AA|PA)[A-Z])| COR| RTD)?};
             # Use '\n+' not '\n' since adding an extra '\n' in bulletin has been seen
             if ($slurp =~ /(${ahl_regex})\r\r\n+BUFR$/) {
                 $self->{CURRENT_AHL} = $1;
@@ -1322,6 +1322,8 @@ sub _decode_sections {
     $self->_spew(2, "Length of section 3: %d", $sec3[0]) if $Spew;
     $self->_spew(2, "Number of subsets: %d Observed data: %d Compressed data: %d",
                  $self->{NUM_SUBSETS}, $self->{OBSERVED_DATA}, $self->{COMPRESSED_DATA}) if $Spew;
+    _complain("0 subsets in BUFR message")
+        if ($Strict_checking and $self->{NUM_SUBSETS} == 0);
     _complain("Bits 3-8 in octet 7 in section 3 are not 0 (octet 7 = $sec3[3])")
         if ($Strict_checking and ($sec3[3] & 0x3f) != 0);
     if ($Spew == 6) {
@@ -1538,7 +1540,7 @@ sub next_observation {
     }
 }
 
-# Dumping content of a subset (including section 0, 1 and 3 if this is
+# Dumping contents of a subset (including section 0, 1 and 3 if this is
 # first subset) in a BUFR message, also displaying message number and
 # ahl (if found) and subset number
 sub dumpsections {
@@ -2198,7 +2200,7 @@ sub resolve_flagvalue {
                                $B_table,$C_table,$num_leading_spaces,'check_illegal');
 }
 
-## Return the content of code table $code_table, or empty string if
+## Return the contents of code table $code_table, or empty string if
 ## code table is not in found
 sub dump_codetable {
     my $self = shift;
@@ -3220,6 +3222,8 @@ sub reencode_message {
 
         ($self->{NUM_SUBSETS}) = $lines[++$i]
             =~ /Number of data subsets:\s+(\d+)/;
+        _croak "Don't support reencoding of 0 subset message"
+            if $self->{NUM_SUBSETS} == 0;
         ($self->{OBSERVED_DATA}) = $lines[++$i]
             =~ /Observed data:\s+(\d+)/;
         ($self->{COMPRESSED_DATA}) = $lines[++$i]
@@ -4700,9 +4704,12 @@ sub _trim {
     $str =~ s/^\s+//;
 
     if ($Strict_checking && $str ne '') {
-        while ($str =~ /(.)/g) {
-            _complain("Character $1 in string '$str' is not allowed in CCITTA5")
-                if ord($1) > 127;
+        foreach my $char (split //, $str) {
+            if (ord($char) > 127) {
+                _complain("Character $char (ascii value " . ord($char) .
+                          ") in string '$str' is not allowed in CCITTA5");
+                last; # Don't want to warn for every bad character
+            }
         }
     }
     return $str;
@@ -5069,7 +5076,7 @@ sub _apply_operator_descriptor {
         _croak "$id No previous bit map defined"
             unless defined $self->{BITMAPS};
         my %hash = @{ $self->{BITMAPS}->[$self->{NUM_BITMAPS}-1]->[$isub] };
-        $self->{REUSE_BITMAP}->[$isub] = [sort keys %hash];
+        $self->{REUSE_BITMAP}->[$isub] = [sort {$a <=> $b} keys %hash];
         $flow = 'no_value';
     } elsif (/^237255/) {
         # Cancel 'use defined data present bit map'
@@ -5180,7 +5187,7 @@ Geo::BUFR - Perl extension for handling of WMO BUFR files.
 
 =head1 SYNOPSIS
 
-  # A simple program to print decoded content of a BUFR file. Note
+  # A simple program to print decoded contents of a BUFR file. Note
   # that a more sophisticated program (bufrread.pl) is included in the
   # package
 
@@ -5308,8 +5315,8 @@ descriptors for this subset, $data is a reference to the corresponding
 values. This method is meant to be used to iterate through all BUFR
 messages in the file or input buffer (see C<new>) associated with the
 $bufr object. Whenever a new BUFR message is reached, section 0-3 will
-also be decoded, whose content is then available through the access
-methods listed below. This is the main BUFR decoding routine in
+also be decoded, the contents of which is then available through the
+access methods listed below. This is the main BUFR decoding routine in
 Geo::BUFR, and will call C<load_BDtables()> internally, but not
 C<load_Ctable>. Consult L</DECODING/ENCODING> if you want more precise
 info about what is returned in $data and $descriptors. If there are no
@@ -5321,13 +5328,13 @@ will again be undef, while get_current_subset_number() will return 1
 after a call to C<next_observation>. A bit weird perhaps, but then
 this is a really weird kind of BUFR message to handle!
 
-Print the content of a subset in BUFR message:
+Print the contents of a subset in BUFR message:
 
   print $bufr->dumpsections($data,$descriptors,$options);
 
 $options is optional. If this is first subset in message, will start
 by printing message number and, if this is first message in a GTS
-bulletin, AHL (Abbreviated Header Line), as well as content of
+bulletin, AHL (Abbreviated Header Line), as well as contents of
 sections 0, 1 and 3. For section 4, will also print subset
 number. $options should be an anonymous hash with possible keys
 'width' and 'bitmap', e.g. { width => 20, bitmap => 0 }. 'bitmap'
@@ -5377,7 +5384,7 @@ values, and is optional (defaults to 15). $data and $descriptors are
 references to arrays of data values and BUFR descriptors respectively,
 likely to have been fetched from C<next_observation>. Code and flag
 values will be resolved if a C table has been loaded, i.e. if
-C<load_Ctable> has been called earlier. C<dumpsection4_with_bitmaps>
+C<load_Ctable> has been called earlier on. C<dumpsection4_with_bitmaps>
 will display the bit-mapped values side by side with the corresponding
 data values. If there is no bit-map in the BUFR message,
 C<dumpsection4_with_bitmaps> will provide same output as
@@ -5453,10 +5460,10 @@ Get current message number:
 
   $message_no = $bufr->get_current_message_number();
 
-Get last Abbreviated Header Line (ahl) before current message
-(undef if not present):
+Get Abbreviated Header Line (AHL) before current message (undef if not
+present):
 
-  $message_ahl = $bufr->get_current_ahl();
+  $ahl = $bufr->get_current_ahl();
 
 
 Accessor methods for section 0-3:
@@ -5612,7 +5619,7 @@ Example:
 
   print $bufr->resolve_flagvalue(4,8006,'B0000000000098013001.TXT')
 
-Print the content of BUFR code (or flag) table:
+Print the contents of BUFR code (or flag) table:
 
   print $bufr->dump_codetable($code_table,$table,$default_table);
 
@@ -5620,7 +5627,7 @@ where $table is (base)name of the C...TXT file containing the code
 tables, optionally followed by a default table which will be used if
 $table is not found.
 
-C<resolve_flagvalue> and <C<dump_codetable> will return empty string if
+C<resolve_flagvalue> and C<dump_codetable> will return empty string if
 flag value or code table is not found.
 
 
@@ -5723,7 +5730,7 @@ strictly necessary to be able to encode a new BUFR message. But there
 is a good reason for requiring it. During encoding the descriptors
 from expanding section 3 will consecutively be compared with the
 descriptors in the user supplied $desc_ref, and if these at some point
-differs, encoding will be aborted with an error message stating the
+differ, encoding will be aborted with an error message stating the
 first descriptor which deviated from the expected one. By requiring
 $desc_ref as input, the risk for encoding an erronous section 4 is
 thus greatly reduced, and also provides the user with highly valuable
@@ -5736,7 +5743,7 @@ as leading and trailing white space.
 =head1 BUFR TABLE FILES
 
 The BUFR table files should follow the format and naming conventions
-used by ECMWF libbufr software (download from
+used by ECMWF BUFRDC software (download from
 http://www.ecmwf.int/products/data/software/download/bufr.html, unpack
 and you will find table files in the bufrtables directory). Other table
 file formats exist and might on request be supported in future
@@ -5807,6 +5814,12 @@ Cancellation operators (20[1-4]00, 203255 etc) when there is nothing to cancel
 
 =item *
 
+0 subsets in message. This may not break any formal rules, but is
+likely to cause problems in further data processing (and Geo::BUFR
+will not allow you to encode or reencode such a message anyway).
+
+=item *
+
 Value encoded using BUFR compression which would be too big to encode
 without compression. For example, for a data descriptor with data
 width 9 bits a value of 510 ought to be the biggest value possible to
@@ -5844,7 +5857,7 @@ Pål Sannes E<lt>pal.sannes@met.noE<gt>
 =head1 CREDITS
 
 I am very grateful to Alvin Brattli, who (while employed as a
-researcher at the Norwegian Metorological Institute) wrote the first
+researcher at the Norwegian Meteorological Institute) wrote the first
 version of this module, with the sole purpose of being able to decode
 some very specific BUFR satellite data, but still provided the main
 framework upon which this module is built.
